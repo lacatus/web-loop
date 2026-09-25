@@ -1,0 +1,44 @@
+schema: spec-driven
+
+# Shown to the AI whenever it creates or applies OpenSpec artifacts.
+context: |
+  Product: web-loop — a TypeScript fullstack web app built by a worker ⇄ validator agent loop.
+
+  Stack (pnpm monorepo):
+    - apps/web: React 19 + Vite + Tailwind v4 + React Router 7 + TanStack Query 5
+    - apps/api: Fastify 5 + Drizzle ORM + SQLite (better-sqlite3), migrations in apps/api/drizzle
+    - packages/shared: zod schemas + inferred types = the API contract used by BOTH apps
+    - e2e: Playwright tests against the built stack
+  Conventions:
+    - Contract first: every request/response shape lives in packages/shared and is parsed at the
+      boundary (API parses requests, web client parses responses).
+    - Every non-2xx API response uses the envelope { error: { code, message, details? } }.
+    - UI must be accessible: every control has an accessible name, errors use role="alert",
+      tests query by role/label (never CSS classes or test ids unless unavoidable).
+    - No `any`, no skipped tests, no console errors in the browser.
+  Definition of done: `pnpm verify` green (spec validate, scenario traceability, lint, typecheck,
+  unit/integration tests, build, e2e) AND the validator agent returns APPROVE.
+
+rules:
+  proposal:
+    - 'Include explicit non-goals so the validator can reject scope creep.'
+  specs:
+    - 'Every scenario MUST be observable and testable from the UI or the HTTP API — no internal function names.'
+    - 'Scenario names MUST be unique within a capability; tests reference them verbatim as "Scenario: <name>" (enforced by scripts/check-traceability.mjs).'
+    - 'For every user-facing requirement, cover the happy path plus the relevant empty, loading, validation-error and server-error states.'
+    - 'Name UI elements by their accessible name in quotes (e.g. the "Add" button, the "New todo" field) so Playwright can target them.'
+  design:
+    - 'State which layers change (shared / api / db migration / web) and why.'
+  tasks:
+    - 'Order tasks contract → api (+ migration) → web → e2e.'
+    - 'Each task that implements a scenario MUST name the test(s) that cover it.'
+    - 'The final task group is always "Verify" with `pnpm verify` green.'
+
+operations:
+  apply:
+    guidance:
+      - 'Implement via the /build-feature loop so the validator agent reviews the result.'
+      - 'Run `pnpm verify:fast` after each task group and `pnpm verify` before handing off.'
+  archive:
+    guidance:
+      - 'Only archive after the validator''s latest review in reviews/ is APPROVE.'
