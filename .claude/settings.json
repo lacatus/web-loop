@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "OPENSPEC_TELEMETRY": "0"
+  },
+  "enabledMcpjsonServers": ["playwright"],
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install)",
+      "Bash(pnpm verify:*)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm format:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm e2e:*)",
+      "Bash(pnpm dev:*)",
+      "Bash(pnpm review:serve:*)",
+      "Bash(pnpm review:stop:*)",
+      "Bash(pnpm traceability:*)",
+      "Bash(pnpm spec:validate:*)",
+      "Bash(pnpm db:generate:*)",
+      "Bash(pnpm --filter:*)",
+      "Bash(pnpm exec openspec:*)",
+      "Bash(openspec:*)",
+      "Bash(node scripts/check-traceability.mjs:*)",
+      "Bash(node scripts/verify.mjs:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git rev-list:*)",
+      "Bash(git merge-base:*)",
+      "Bash(curl -sf http://127.0.0.1:*)",
+      "Bash(curl -s http://127.0.0.1:*)",
+      "mcp__playwright"
+    ],
+    "deny": ["Read(./.env)", "Read(./.env.*)"]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-start.sh",
+            "timeout": 300
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format-file.mjs",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

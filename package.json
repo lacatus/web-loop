@@ -1,0 +1,40 @@
+{
+  "name": "web-loop",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,web -c blue,magenta \"pnpm --filter @web-loop/api dev\" \"pnpm --filter @web-loop/web dev\"",
+    "build": "pnpm -r --filter \"./apps/**\" build",
+    "start": "concurrently -k -n api,web \"pnpm --filter @web-loop/api start\" \"pnpm --filter @web-loop/web preview\"",
+    "lint": "eslint . --max-warnings=0 && prettier --check .",
+    "format": "prettier --write . && eslint . --fix",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r --filter !@web-loop/e2e test",
+    "e2e": "pnpm --filter @web-loop/e2e test",
+    "spec:validate": "openspec validate --all --strict --no-interactive",
+    "verify": "node scripts/verify.mjs",
+    "verify:fast": "node scripts/verify.mjs --fast",
+    "traceability": "node scripts/check-traceability.mjs",
+    "review:serve": "node scripts/review-serve.mjs",
+    "review:stop": "node scripts/review-serve.mjs --stop",
+    "db:generate": "pnpm --filter @web-loop/api db:generate",
+    "db:migrate": "pnpm --filter @web-loop/api db:migrate"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@fission-ai/openspec": "^1.13.2",
+    "@playwright/mcp": "^0.0.82",
+    "concurrently": "^10.0.5",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.70.1"
+  }
+}
