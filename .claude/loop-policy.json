@@ -1,0 +1,33 @@
+{
+  "$comment": "Single source of routing truth for the worker ⇄ validator loop. Agent frontmatter in .claude/agents/ must match; enforced by `pnpm check:agents` (verify gate `agents`). See openspec/changes/tune-model-routing-tokenomics/design.md.",
+  "agents": {
+    "worker": {
+      "model": "sonnet",
+      "effort": "high",
+      "maxTurns": 80,
+      "cacheTtl": "5m",
+      "mcpServers": []
+    },
+    "validator": {
+      "model": "opus",
+      "effort": "high",
+      "maxTurns": 40,
+      "cacheTtl": "1h",
+      "mcpServers": []
+    },
+    "browser-qa": {
+      "model": "sonnet",
+      "effort": "medium",
+      "maxTurns": 40,
+      "cacheTtl": "1h",
+      "mcpServers": ["playwright"]
+    }
+  },
+  "subagentDefaultModel": "sonnet",
+  "escalation": {
+    "agent": "worker",
+    "model": "opus",
+    "complexityMarker": "complexity: high",
+    "repeatedBlockingRounds": 2
+  }
+}

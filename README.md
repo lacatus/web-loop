@@ -8,23 +8,25 @@ your machine, in Claude Code sessions, and in GitHub Actions.
   as requirements + `WHEN/THEN` scenarios. They are the contract.
 - **Worker** — a Claude Code subagent that implements the change across contract, API, DB and UI,
   with a test per scenario.
+- **Browser QA** — a subagent that drives the real app in Chromium via **Playwright MCP** through
+  every scenario and returns a compact evidence table.
 - **Validator** — a separate, read-only subagent that reviews like a skeptical PR reviewer: it
-  challenges the spec, reads the diff, audits the tests, runs every gate, and drives the real app
-  in Chromium via **Playwright MCP** before it will `APPROVE`.
-- **Gate** — `pnpm verify`: spec validation → scenario traceability → lint → typecheck →
-  unit/integration → build → Playwright e2e.
+  challenges the spec, reads the diff, audits the tests, judges the gate summary and the browser
+  evidence (asking for targeted re-checks), and only then will `APPROVE`.
+- **Gate** — `pnpm verify`: spec validation → agents policy → scenario traceability → lint →
+  typecheck → unit/integration → build → Playwright e2e.
 
 ```
-            ┌──────────────────────────── /build-feature <change> ─────────────────────────────┐
-            │                                                                                  │
- /opsx:propose ──► spec ──► worker ──► pnpm verify ──► validator ──► APPROVE ──► /opsx:archive
-   (you review       ▲      (code +                    (spec review, diff review,    │
-    the spec)        │       tests)                     test audit, gates,           │
-                     │                                  Playwright MCP walkthrough)  │
-                     │                                          │                    ▼
-                     │                             REQUEST_CHANGES (findings)    specs updated,
-                     │                                          │                ready to commit
-                     └──────────── spec-gap? ask you ◄──────────┴──► next round (max 3)
+/opsx:propose ──► spec (you review it)
+                    │
+/build-feature ─────▼──────────────────────────────────────────────────────────────────────
+   worker ──► pnpm verify --summary ──► browser-qa ──────────► validator ──► APPROVE ──► /opsx:archive
+   (code + tests)  (gate table,          (Playwright MCP        (spec, diff,              (specs updated,
+     ▲              failing tails)        evidence table)        tests, gates,             ready to commit)
+     │                                                           evidence)
+     │                                                              │
+     └──────── next round (max 3) ◄──── REQUEST_CHANGES ◄───────────┤
+                                        spec-gap? ask you ◄─────────┘
 ```
 
 ## Stack
@@ -70,6 +72,7 @@ Also available: `/review <change>` (validator only, e.g. on work you wrote yours
 | Gate         | Command              | What it proves                                                 |
 | ------------ | -------------------- | -------------------------------------------------------------- |
 | spec         | `pnpm spec:validate` | OpenSpec specs and changes are well-formed (`--strict`)        |
+| agents       | `pnpm check:agents`  | agent model/effort/turns/cache/MCP match the routing policy    |
 | traceability | `pnpm traceability`  | every `Scenario:` has at least one test named after it         |
 | lint         | `pnpm lint`          | ESLint (no `any`, hooks rules, type imports) + Prettier        |
 | typecheck    | `pnpm typecheck`     | strict TS across all packages                                  |
@@ -78,7 +81,36 @@ Also available: `/review <change>` (validator only, e.g. on work you wrote yours
 | e2e          | `pnpm e2e`           | Playwright against the built stack on a fresh database         |
 
 `pnpm verify` runs them in order (`--fast` skips build + e2e, `--keep-going` doesn't stop at the
-first failure). CI (`.github/workflows/ci.yml`) runs the same commands.
+first failure, `--summary` writes each gate's output to `artifacts/verify/<gate>.log` and prints only
+the summary plus the last 40 lines of failing gates — the mode agents use). CI
+(`.github/workflows/ci.yml`) runs the same commands.
+
+## Tokenomics
+
+Each agent runs on the cheapest model that does its job well. The routing policy is
+`.claude/loop-policy.json`; `pnpm check:agents` fails when an agent file drifts from it.
+
+| Agent           | Model                                         | Effort | maxTurns | Cache TTL | Playwright MCP |
+| --------------- | --------------------------------------------- | ------ | -------- | --------- | -------------- |
+| worker          | Sonnet; Opus when `pnpm loop:route` escalates | high   | 80       | 5m        | no             |
+| validator       | Opus (the quality gate)                       | high   | 40       | 1h        | no             |
+| browser-qa      | Sonnet                                        | medium | 40       | 1h        | yes            |
+| other subagents | Sonnet via `CLAUDE_CODE_SUBAGENT_MODEL`       | –      | –        | –         | –              |
+
+- **Escalation** — `pnpm loop:route --change <id> --round <n>` prints `opus` when the change's
+  `design.md` declares `complexity: high` or the same blocking finding appears in both previous
+  reviews, otherwise `sonnet`, plus the reason.
+- **Token report** — `pnpm tokens` reads Claude Code transcripts
+  (`~/.claude/projects/<project>/<session>.jsonl` + `subagents/`) and prints requests, input,
+  output, cache write, cache read and cache-hit % per agent and model, then a list-price estimate.
+  Flags: `--latest` (default) / `--session <id>`, `--change <id>`, `--round <n>`,
+  `--format text|md|json`, `--dir <transcripts dir>`, `--append <file>`. Prices are in
+  `packages/loop-tools/pricing.json` (with source and date); unknown models show as `unpriced`.
+  Dollars are estimates only — on a subscription plan, tokens and cache-hit % are what matter.
+  `/build-feature` appends a `## Tokens` section to every round's review and totals the change.
+- **Status line** — `model · effort · ctx % · cache % · ~$ list`, wired in `.claude/settings.json`.
+- **Habits** — `/clear` between features; agents use `pnpm verify --summary` rather than streaming
+  full gate logs into their context.
 
 ## Repo map
 
@@ -86,11 +118,12 @@ first failure). CI (`.github/workflows/ci.yml`) runs the same commands.
 apps/api            Fastify API, Drizzle schema + migrations, integration tests
 apps/web            React app, component tests
 packages/shared     zod contract
+packages/loop-tools verify runner, agents policy check, loop:route, tokens report, status line
 e2e                 Playwright tests + config
 openspec            specs (source of truth), changes, archive, config.yaml (project context + rules)
-.claude/agents      worker.md, validator.md
+.claude/agents      worker.md, browser-qa.md, validator.md (+ loop-policy.json routing)
 .claude/commands    build-feature, review, verify, opsx/*
 .claude/hooks       session-start (install deps), format-file (prettier + eslint after edits)
 .mcp.json           Playwright MCP server
-scripts             verify, traceability, Playwright MCP launcher, review server
+scripts             traceability, Playwright MCP launcher, review server
 ```
