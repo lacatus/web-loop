@@ -1,0 +1,15 @@
+{
+  "source": "Anthropic API pricing (claude-api skill cache 2026-06-24)",
+  "asOf": "2026-09-25",
+  "currency": "USD",
+  "unit": "per million tokens",
+  "cacheWriteMultiplier": 1.25,
+  "cacheWrite1hMultiplier": 2,
+  "cacheReadMultiplier": 0.1,
+  "models": {
+    "claude-opus-5-5": { "input": 4, "output": 20 },
+    "claude-opus-5": { "input": 5, "output": 25 },
+    "claude-sonnet-5": { "input": 2, "output": 10 },
+    "claude-haiku-4-5": { "input": 1, "output": 5 }
+  }
+}
