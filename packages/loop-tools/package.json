@@ -1,0 +1,21 @@
+{
+  "name": "@web-loop/loop-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Tooling for the worker ⇄ validator loop: agent policy lint, worker routing, verify runner, token report, status line.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.1"
+  }
+}

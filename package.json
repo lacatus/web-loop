@@ -16,8 +16,11 @@
     "test": "pnpm -r --filter !@web-loop/e2e test",
     "e2e": "pnpm --filter @web-loop/e2e test",
     "spec:validate": "openspec validate --all --strict --no-interactive",
-    "verify": "node scripts/verify.mjs",
-    "verify:fast": "node scripts/verify.mjs --fast",
+    "verify": "tsx packages/loop-tools/src/bin/verify.ts",
+    "verify:fast": "tsx packages/loop-tools/src/bin/verify.ts --fast",
+    "check:agents": "tsx packages/loop-tools/src/bin/check-agents.ts",
+    "loop:route": "tsx packages/loop-tools/src/bin/route.ts",
+    "tokens": "tsx packages/loop-tools/src/bin/tokens.ts",
     "traceability": "node scripts/check-traceability.mjs",
     "review:serve": "node scripts/review-serve.mjs",
     "review:stop": "node scripts/review-serve.mjs --stop",
@@ -34,6 +37,7 @@
     "eslint-plugin-react-refresh": "^0.5.7",
     "globals": "^17.12.0",
     "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1"
   }

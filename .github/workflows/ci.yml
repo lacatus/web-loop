@@ -16,7 +16,7 @@ env:
 
 jobs:
   spec:
-    name: Spec (OpenSpec + traceability)
+    name: Spec (OpenSpec + agents policy + traceability)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -27,6 +27,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm spec:validate
+      - run: pnpm check:agents
       - run: pnpm traceability
 
   static:
