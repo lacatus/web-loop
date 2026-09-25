@@ -263,7 +263,7 @@ describe('TodosPage — due dates and reminders', () => {
     expect(dueInput).not.toHaveAttribute('aria-invalid');
   });
 
-  it('Scenario: Reject an incomplete due date — a date the contract cannot represent shows the same error', async () => {
+  it('a complete due date the contract cannot represent (year 10000) shows the due date error', async () => {
     const { fetchMock } = serve([]);
     const { user } = renderWithProviders(<TodosPage />);
     await screen.findByText(/no todos yet/i);

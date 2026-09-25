@@ -19,7 +19,7 @@ export function RemindersPanel({ todos, now }: { todos: Todo[]; now: number }) {
           {reminders.map(({ todo, kind }) => (
             <li
               key={todo.id}
-              className={kind === 'overdue' ? 'font-medium text-red-700' : 'text-amber-900'}
+              className={`min-w-0 break-words ${kind === 'overdue' ? 'font-medium text-red-700' : 'text-amber-900'}`}
             >
               {reminderText(todo, kind, now)}
             </li>
