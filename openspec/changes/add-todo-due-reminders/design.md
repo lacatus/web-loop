@@ -20,13 +20,14 @@ Layers changing: **shared** (contract gains `dueAt`), **db** (new nullable colum
 
 ## Decisions
 
-- **Storage: UTC ISO-8601 string (`due_at TEXT NULL`)**, same format as `created_at`. The API accepts any ISO datetime with an offset (`z.iso.datetime({ offset: true })`) and normalizes to UTC `…Z`. Alternative: unix epoch integer — rejected for consistency with `createdAt` and readability.
+- **Storage: UTC ISO-8601 string (`due_at TEXT NULL`)**, same format as `created_at`. The API accepts any ISO datetime with an offset, seconds optional (`z.iso.datetime({ offset: true, precision: -1 })` or equivalent) and normalizes to UTC `…Z`. Alternative: unix epoch integer — rejected for consistency with `createdAt` and readability.
 - **Input: native `<input type="datetime-local">`** labelled "Due (optional)". Its value is local wall-clock time without an offset; the client converts it with `new Date(value).toISOString()`. Native control gives an accessible, mobile-friendly calendar picker for free. Alternative: a JS date-picker library — rejected (weight, a11y risk).
 - **Past due dates are accepted.** A user may log something they're already late on; it simply shows as overdue.
 - **Ordering in the API** (`ORDER BY due_at IS NULL, due_at, id`), so every client gets the same order. Completion does not affect order (avoids rows jumping when toggled).
 - **Reminder classification is a pure function** `reminderFor(todo, now)` in `packages/shared/src/reminders.ts` returning `'overdue' | 'due-soon' | null` (window constant `DUE_SOON_MINUTES = 60`; overdue = `dueAt <= now`; due-soon = `now < dueAt <= now + 60min`; completed or no `dueAt` → `null`). Shared so the web app and tests use one definition.
 - **Clock: `useNow(intervalMs = 30_000)` hook** re-renders the panel periodically; tests use fake timers.
-- **Reminders panel** is a `<section aria-labelledby>` headed "Reminders" containing a `role="status"` list, rendered only when at least one reminder exists.
+- **Reminders panel** is a `<section aria-labelledby>` headed "Reminders" containing a `role="status"` list, rendered only when at least one reminder exists. Decision (human, round 1): the first appearance of the panel need not be announced; only changes to a visible panel are.
+- **Incomplete picker input**: a `datetime-local` field with `validity.badInput` blocks the submit with "Enter a valid due date" (an empty value alone does not mean "no due date").
 - **Clearing** uses `PATCH { dueAt: null }` from a "Clear due date for <title>" button on the item.
 
 ## Risks / Trade-offs

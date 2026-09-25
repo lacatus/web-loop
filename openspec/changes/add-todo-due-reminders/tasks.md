@@ -24,3 +24,11 @@
 ## 5. Verify
 
 - [x] 5.1 `pnpm verify` green and `node scripts/check-traceability.mjs --change add-todo-due-reminders` shows every scenario covered
+
+## 6. Round 2 (review findings, see reviews/round-1.md)
+
+- [ ] 6.1 F1: block submit when "Due (optional)" has `validity.badInput`; show "Enter a valid due date" — test: TodosPage.test.tsx (Scenario: Reject an incomplete due date)
+- [ ] 6.2 F4: accept ISO datetimes without seconds — tests: packages/shared/src/todo.test.ts, apps/api/test/todos.test.ts
+- [ ] 6.3 F3: after "Clear due date for <title>", move focus to that todo's checkbox — test: TodosPage.test.tsx
+- [ ] 6.4 F5: keep "Delete" aligned right at 375px
+- [ ] 6.5 `pnpm verify` green

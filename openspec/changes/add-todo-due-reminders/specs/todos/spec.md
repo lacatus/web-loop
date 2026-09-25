@@ -27,7 +27,7 @@ The system SHALL return all todos ordered by due date (soonest first), followed 
 
 ### Requirement: Due date
 
-The system SHALL let a user optionally give a todo a due date and time. The API MUST accept `dueAt` as an ISO-8601 datetime with a timezone offset or `null`, MUST store and return it normalized to UTC (`…Z`), and MUST return `dueAt: null` for todos without one. The UI SHALL offer a "Due (optional)" date-and-time field when creating a todo, SHALL show each todo's due date in the user's local time, and SHALL let the user clear it with a "Clear due date for <title>" button. Due dates in the past MUST be accepted.
+The system SHALL let a user optionally give a todo a due date and time. The API MUST accept `dueAt` as an ISO-8601 datetime with a timezone offset (seconds and fractional seconds optional, e.g. `2026-10-01T10:00Z`) or `null`, MUST store and return it normalized to UTC (`…Z`), and MUST return `dueAt: null` for todos without one. The UI SHALL offer a "Due (optional)" date-and-time field when creating a todo, SHALL show each todo's due date in the user's local time, and SHALL let the user clear it with a "Clear due date for <title>" button. Due dates in the past MUST be accepted.
 
 #### Scenario: Create a todo with a due date
 
@@ -45,6 +45,12 @@ The system SHALL let a user optionally give a todo a due date and time. The API 
 - **WHEN** the API receives a create or update with a `dueAt` that is not an ISO-8601 datetime with an offset (for example "tomorrow" or "2026-13-01T10:00")
 - **THEN** it responds 400 with error code `VALIDATION_ERROR` and nothing is created or changed
 
+#### Scenario: Reject an incomplete due date
+
+- **WHEN** the "Due (optional)" field holds a partially entered date or time (for example a date without a time) and the user presses "Add"
+- **THEN** no todo is created
+- **AND** an error "Enter a valid due date" is announced and the "Due (optional)" field is marked invalid
+
 #### Scenario: Accept a past due date
 
 - **WHEN** a todo is created with a due date in the past
@@ -57,7 +63,7 @@ The system SHALL let a user optionally give a todo a due date and time. The API 
 
 ### Requirement: Reminders
 
-The UI SHALL show a "Reminders" panel listing every incomplete todo that is overdue (due date at or before now) or due soon (due date within the next 60 minutes), overdue first, then by due date. Each entry MUST read "<title> — overdue" or "<title> — due in N min" (N rounded up, minimum 1). The panel MUST update as time passes without reloading the page (at least every 30 seconds) and MUST be announced politely to assistive technology. The panel MUST NOT be shown when there are no reminders. Overdue incomplete todos SHALL also be visibly marked "Overdue" in the list.
+The UI SHALL show a "Reminders" panel listing every incomplete todo that is overdue (due date at or before now) or due soon (due date within the next 60 minutes), overdue first, then by due date. Each entry MUST read "<title> — overdue" or "<title> — due in N min" (N rounded up, minimum 1). The panel MUST update as time passes without reloading the page (at least every 30 seconds). Changes to a visible Reminders panel MUST be announced politely to assistive technology; the panel's first appearance need not be announced. The panel MUST NOT be shown when there are no reminders. Overdue incomplete todos SHALL also be visibly marked "Overdue" in the list.
 
 #### Scenario: Due soon reminder
 
