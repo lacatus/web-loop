@@ -1,0 +1,31 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# SQLite databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Playwright / Playwright MCP output
+artifacts/
+test-results/
+playwright-report/
+blob-report/
+.playwright-mcp/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Claude Code local-only settings
+.claude/settings.local.json
