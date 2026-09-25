@@ -40,6 +40,14 @@
 - [x] 8.1 `build-feature.md`: new step order, `loop:route` per worker call, `verify --summary`, browser-qa step, re-check requests, Tokens section per round, total in the final report
 - [x] 8.2 `CLAUDE.md` and `README.md`: tokenomics section (routing table, `pnpm tokens`, habits: `/clear` between features, summary mode for agents)
 
+## 10. Round 2 (see reviews/round-1.md)
+
+- [ ] 10.1 F1: `--change` without `--session` aggregates all sessions — test: `tokens.test.ts` (Scenario: Change total spans sessions)
+- [ ] 10.2 F4 (human decision): `pnpm tokens --mark`, orchestrator rows per round, used by `/build-feature` — test: `tokens.test.ts` (Scenario: Orchestrator usage is attributed to its round)
+- [ ] 10.3 F2: summary mode strips pnpm/npm reporter/loglevel env so gate logs are complete — test: `verify-runner.test.ts`
+- [ ] 10.4 F3: `pnpm check:agents` in the CI spec job
+- [ ] 10.5 Nits F5–F10 (FORCE_COLOR, stale logs, allowlist `pnpm -s`, CLAUDE.md wording, document the complexity-marker rule, resume continues from the highest round)
+
 ## 9. Verify
 
 - [x] 9.1 `pnpm verify` green; `node scripts/check-traceability.mjs --change tune-model-routing-tokenomics` covers every scenario

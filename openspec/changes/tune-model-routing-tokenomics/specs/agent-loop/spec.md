@@ -94,12 +94,22 @@ The loop SHALL provide `pnpm tokens`, which reads the project's Claude Code sess
 
 ### Requirement: Token usage in the round record
 
-The build loop SHALL append a "Tokens" section to every round's review record. The section MUST give the token usage of that round's worker, browser QA and validator. The final report MUST total usage across all rounds.
+The build loop SHALL append a "Tokens" section to every round's review record. The section MUST give the token usage of that round's worker, browser QA, validator and orchestrator. The orchestrator's usage is the main session's usage between the round's recorded start and end marks. The final report MUST total usage across all rounds, including rounds recorded in earlier sessions.
 
 #### Scenario: Round record includes token usage
 
 - **WHEN** a round's review record is written
 - **THEN** it ends with a "Tokens" section showing one row per agent that ran in that round, in the same columns as `pnpm tokens`
+
+#### Scenario: Orchestrator usage is attributed to its round
+
+- **WHEN** start and end marks were recorded for a round and the main session made API calls between them
+- **THEN** the round's "Tokens" section includes an "orchestrator rN" row with exactly the main-session usage whose timestamps fall inside that window
+
+#### Scenario: Change total spans sessions
+
+- **WHEN** a change's rounds ran in two different sessions and `pnpm tokens --change <id>` runs without `--session`
+- **THEN** the report includes the rounds from both sessions and names both sessions
 
 ### Requirement: Cost-aware status line
 

@@ -48,6 +48,7 @@ See proposal.md for why. Relevant facts, checked against the current Claude Code
    - Output order is subscription-first: tokens and cache-hit % come before dollars, and the dollar column is headed "list-price est.".
    - Pricing lives in `packages/loop-tools/pricing.json` with `source` and `asOf`. A model missing from it shows as `unpriced`, never `$0`.
    - Formats: `--format md` (used by `/build-feature` for the Tokens section) and `--format json`.
+6b. **Orchestrator attribution (human decision, round 1 F4).** The main session's cost counts toward a change, because the new flow moves some work into it. `/build-feature` runs `pnpm tokens --mark <change> <round> start|end` around each round, which records ISO timestamps in `openspec/changes/<id>/reviews/.marks.json`. Main-session responses whose `timestamp` falls in a round's window are reported as `orchestrator rN`. With `--change` and no `--session`, the report aggregates every session in the project directory and names them. The benchmark compares totals including the orchestrator. The baseline is re-measured the same way: the add-todo-due-reminders main-session delta is computed from its session transcript, using the time windows of that run's subagent transcripts.
 7. **Cache TTL:** `experimental.cacheTtl: 1h` on validator and browser-qa. Both run long, with multi-minute gaps while gates run. Subscriptions may already get a 1h TTL; setting it explicitly makes the behavior deterministic. This relies on an experimental field, so the token report's cache-write column is the check that it helps.
 8. **Status line** (`packages/loop-tools/src/statusline.ts`, wired through `settings.json` → `statusLine`): prints `model · effort · ctx NN% · cache NN% · ~$X.XX list`. Missing fields are dropped rather than printed as `undefined`.
 
@@ -61,7 +62,7 @@ See proposal.md for why. Relevant facts, checked against the current Claude Code
 
 ## Verification plan (post-build, not part of `pnpm verify`)
 
-1. **Benchmark replay.** On a scratch branch at `c071d54` (the add-todo-due-reminders proposal), run `/build-feature add-todo-due-reminders` with the new policy. Compare total tokens, cache-hit % and list-price estimate per completed change against the baseline ($8.16, 2 rounds).
+1. **Benchmark replay** (totals include the orchestrator rows; re-baseline the old run the same way). On a scratch branch at `c071d54` (the add-todo-due-reminders proposal), run `/build-feature add-todo-due-reminders` with the new policy. Compare total tokens, cache-hit % and list-price estimate per completed change against the baseline ($8.16, 2 rounds).
 2. **Seeded-defect check.** Reintroduce the round-1 bug (a half-entered due date silently dropped). The new browser-qa + validator pair must still return `REQUEST_CHANGES` on it.
 3. Success: at least 40% lower list-price estimate, no more rounds than the baseline, and the seeded defect is caught.
 
