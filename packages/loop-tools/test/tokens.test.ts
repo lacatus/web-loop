@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { memoryIo } from '../src/io';
-import { REPORT_HEADER, type TokenReport, projectDirName, tokensCli } from '../src/tokens';
+import { REPORT_HEADER, type TokenReport, projectDirName, roundAt, tokensCli } from '../src/tokens';
 
 const FIXTURES = join(import.meta.dirname, 'fixtures/projects');
 const PROJECT = '-work-demo-app';
@@ -439,6 +439,100 @@ describe('pnpm tokens across sessions and rounds', () => {
     const section = readFileSync(review, 'utf8');
     expect(section).toMatch(/^\| orchestrator r1 \| claude-opus-5-5 \| 3 \|/m);
     expect(section.indexOf('| orchestrator r1 |')).toBeGreaterThan(section.indexOf('## Tokens'));
+  });
+
+  it('Scenario: Orchestrator usage is attributed to its round — only from the session that ran the change, not a concurrent unrelated session', () => {
+    const { dir, report, mark } = splitChange();
+    mark('1', 'start', '2026-09-24T10:00:00.000Z');
+    mark('1', 'end', '2026-09-24T10:30:00.000Z');
+    mark('2', 'start', '2026-09-25T11:00:00.000Z');
+    mark('2', 'end', '2026-09-25T11:30:00.000Z');
+    // A concurrent session in the same project, busy inside both windows. It spawned a subagent,
+    // but for another change; it also repeats (forks) sess-b's `b_in` record and is newer than
+    // sess-b, so without the fix its copy would win the dedupe.
+    writeSession(
+      dir,
+      'sess-x',
+      '2026-09-25T12:30:00Z',
+      [
+        reply({ id: 'x_r1', ts: '2026-09-24T10:15:00Z', output: 77777 }),
+        reply({ id: 'b_in', ts: '2026-09-25T11:05:00Z', output: 20 }),
+        reply({ id: 'x_r2', ts: '2026-09-25T11:10:00Z', output: 99999 }),
+      ],
+      {
+        xw: {
+          type: 'worker',
+          lines: [
+            prompt('2026-09-25T11:02:00Z', 'change=other\nround=2'),
+            reply({ id: 'xw', ts: '2026-09-25T11:02:01Z', output: 8 }),
+          ],
+        },
+      },
+    );
+
+    const r1 = report(['--change', 'demo', '--round', '1']);
+    expect(byAgent(r1)).toEqual({ 'orchestrator r1': 1110, 'worker r1': 2, 'validator r1': 3 });
+    expect(r1.sessions).toEqual(['sess-a', 'sess-b']); // sess-b holds the deduped a_stream copy
+
+    const r2 = report(['--change', 'demo', '--round', '2']);
+    expect(byAgent(r2)).toEqual({ 'orchestrator r2': 20, 'worker r2': 4, 'validator r2': 6 });
+    expect(r2.rows[0]?.usage.requests).toBe(1);
+    expect(r2.sessions).toEqual(['sess-b']);
+
+    const total = report(['--change', 'demo']);
+    expect(total.sessions).toEqual(['sess-a', 'sess-b']);
+    expect(total.total.output).toBe(1110 + 2 + 3 + 20 + 4 + 6);
+    // The unrelated session still reports its own subagent under its own change.
+    expect(byAgent(report(['--change', 'other', '--session', 'sess-x']))).toEqual({
+      'worker r2': 8,
+    });
+  });
+
+  it('Scenario: Orchestrator usage is attributed to its round — a round left open ends at the next round start', () => {
+    const open2 = {
+      '2': { start: '2026-09-25T10:00:00.000Z' },
+      '3': { start: '2026-09-25T11:00:00.000Z', end: '2026-09-25T11:30:00.000Z' },
+    };
+    expect(roundAt(open2, '2026-09-25T10:30:00Z')).toBe('2');
+    expect(roundAt(open2, '2026-09-25T10:59:59.999Z')).toBe('2');
+    expect(roundAt(open2, '2026-09-25T11:00:00.000Z')).toBe('3');
+    expect(roundAt(open2, '2026-09-25T11:10:00Z')).toBe('3'); // inside round 3, not round 2
+    expect(roundAt(open2, '2026-09-25T11:30:00.001Z')).toBeUndefined(); // round 2 is closed by 3
+    expect(roundAt(open2, '2026-09-25T09:59:59Z')).toBeUndefined();
+
+    // End to end: round 2 left open (e.g. an interrupted run), round 3 marked in full.
+    const { report, mark } = splitChange();
+    mark('1', 'start', '2026-09-24T10:00:00.000Z');
+    mark('1', 'end', '2026-09-24T10:30:00.000Z');
+    mark('2', 'start', '2026-09-25T11:00:00.000Z');
+    mark('3', 'start', '2026-09-25T11:40:00.000Z');
+    mark('3', 'end', '2026-09-25T11:50:00.000Z');
+    expect(byAgent(report(['--change', 'demo', '--round', '2']))).toEqual({
+      'orchestrator r2': 20, // b_in only; b_after (11:45) is inside round 3
+      'worker r2': 4,
+      'validator r2': 6,
+    });
+    expect(byAgent(report(['--change', 'demo', '--round', '3']))).toEqual({
+      'orchestrator r3': 30000,
+    });
+  });
+
+  it('Scenario: Orchestrator usage is attributed to its round — the latest round without an end mark still counts (mid-round report)', () => {
+    const closed2open3 = {
+      '2': { start: '2026-09-25T10:00:00.000Z', end: '2026-09-25T10:30:00.000Z' },
+      '3': { start: '2026-09-25T11:00:00.000Z' },
+    };
+    expect(roundAt(closed2open3, '2026-09-25T10:45:00Z')).toBeUndefined();
+    expect(roundAt(closed2open3, '2026-09-26T09:00:00Z')).toBe('3');
+
+    const { report, mark } = splitChange();
+    mark('1', 'start', '2026-09-24T10:00:00.000Z');
+    mark('1', 'end', '2026-09-24T10:30:00.000Z');
+    mark('2', 'start', '2026-09-25T11:00:00.000Z'); // round 2 in progress
+    const r2 = report(['--change', 'demo', '--round', '2']);
+    // b_in + b_after; sess-c's later chat is not an orchestrating session and stays out.
+    expect(byAgent(r2)).toEqual({ 'orchestrator r2': 30020, 'worker r2': 4, 'validator r2': 6 });
+    expect(r2.sessions).toEqual(['sess-b']);
   });
 
   it('--mark validates its arguments and needs a start before an end', () => {

@@ -9,7 +9,8 @@
  * Orchestrator attribution: `/build-feature` records each round's start/end time with
  * `pnpm tokens --mark <change> <round> start|end` (openspec/changes/<id>/reviews/.marks.json).
  * With `--change`, main-session responses whose `timestamp` falls in a round's window are
- * reported as `orchestrator r<n>`; without `--session` every session in the project is read.
+ * reported as `orchestrator r<n>` — only from sessions that spawned a subagent for the change
+ * (`change=<id>` in its prompt); without `--session` every session in the project is read.
  */
 import {
   appendFileSync,
@@ -318,13 +319,24 @@ export function writeMark(
   return { path, timestamp };
 }
 
-/** The round whose [start, end] window (inclusive; open-ended while there is no end) holds `timestamp`. */
+/**
+ * The round whose window holds `timestamp`. A closed window is [start, end] (inclusive). A window
+ * without an end mark runs until the next round's start (exclusive), so a round left open never
+ * absorbs later rounds; the latest open round stays open-ended (a report taken mid-round).
+ */
 export function roundAt(marks: RoundMarks, timestamp: string | undefined): string | undefined {
   const t = timestamp === undefined ? Number.NaN : Date.parse(timestamp);
   if (Number.isNaN(t)) return undefined;
+  const starts = Object.values(marks).map((w) => Date.parse(w.start));
   for (const [round, w] of Object.entries(marks)) {
-    const end = w.end === undefined ? Number.POSITIVE_INFINITY : Date.parse(w.end);
-    if (t >= Date.parse(w.start) && t <= end) return round;
+    const start = Date.parse(w.start);
+    if (t < start) continue;
+    if (w.end !== undefined) {
+      if (t <= Date.parse(w.end)) return round;
+      continue;
+    }
+    const next = Math.min(...starts.filter((s) => s > start), Number.POSITIVE_INFINITY);
+    if (t < next) return round;
   }
   return undefined;
 }
@@ -387,10 +399,11 @@ export function buildReport(options: ReportOptions): TokenReport | undefined {
   if (selected.length === 0) return undefined;
 
   const agents = new Map<string, AgentInfo>();
-  // Keyed by response id across all sessions: a resumed session that repeats earlier
-  // responses still counts each of them once.
-  const responses = new Map<string, Response>();
-  // Oldest session first, so that for a repeated id the newest record wins.
+  // Parsed files: oldest session first; per session the main file, then its subagent files.
+  const parsedFiles: Map<string, Response>[] = [];
+  // With --change, orchestrator usage comes only from the session(s) that ran the change: main
+  // sessions that spawned at least one subagent whose prompt says `change=<id>`.
+  const orchestrating = new Set<string>();
   for (const session of [...selected].reverse()) {
     const main = parseTranscript(readFileSync(session.path, 'utf8'), {
       sessionId: session.sessionId,
@@ -398,7 +411,7 @@ export function buildReport(options: ReportOptions): TokenReport | undefined {
     });
     const mainKey = agentKeyOf(session.sessionId, 'main');
     agents.set(mainKey, { key: mainKey, label: 'main', firstSeen: '', isMain: true });
-    for (const [id, r] of main.responses) responses.set(id, r);
+    parsedFiles.push(main.responses);
 
     const subDir = join(options.dir, session.sessionId, 'subagents');
     const subFiles = existsSync(subDir)
@@ -424,12 +437,27 @@ export function buildReport(options: ReportOptions): TokenReport | undefined {
         firstSeen: parsed.firstSeen,
         isMain: false,
       });
-      for (const [rid, r] of parsed.responses) responses.set(rid, r);
+      parsedFiles.push(parsed.responses);
+      if (options.change !== undefined && change === options.change) {
+        orchestrating.add(session.sessionId);
+      }
     }
   }
 
   const filtered = options.change !== undefined || options.round !== undefined;
   const marks = options.change !== undefined ? (options.marks ?? {}) : {};
+  // Main-session usage of any other (e.g. concurrent) session is dropped before the dedupe
+  // below, so that an unrelated session repeating an orchestrating session's record cannot
+  // displace it (and is not named as contributing).
+  const dropMain = (r: Response) =>
+    filtered && r.agentId === 'main' && !orchestrating.has(r.sessionId);
+
+  // Keyed by response id across all sessions: a resumed session that repeats earlier
+  // responses still counts each of them once. Oldest session first: the newest record wins.
+  const responses = new Map<string, Response>();
+  for (const file of parsedFiles) {
+    for (const [id, r] of file) if (!dropMain(r)) responses.set(id, r);
+  }
 
   /** The row a response belongs to, or undefined when the filters exclude it. */
   const attribute = (r: Response): AgentInfo | undefined => {

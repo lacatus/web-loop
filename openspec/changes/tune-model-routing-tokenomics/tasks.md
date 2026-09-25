@@ -48,6 +48,11 @@
 - [x] 10.4 F3: `pnpm check:agents` in the CI spec job
 - [x] 10.5 Nits F5–F10 (FORCE_COLOR, stale logs, allowlist `pnpm -s`, CLAUDE.md wording, document the complexity-marker rule, resume continues from the highest round)
 
+## 11. Round 3 (see reviews/round-2.md)
+
+- [x] 11.1 F11: orchestrator rows only from main sessions that spawned a `change=<id>` subagent; other sessions are neither counted nor named — test: `tokens.test.ts` (Scenario: Orchestrator usage is attributed to its round — only from the session that ran the change…)
+- [x] 11.2 F12: a round without an end mark ends at the next round's start; the latest open round stays open-ended — tests: `tokens.test.ts` (Scenario: Orchestrator usage is attributed to its round — a round left open… / the latest round without an end mark…)
+
 ## 9. Verify
 
 - [x] 9.1 `pnpm verify` green; `node scripts/check-traceability.mjs --change tune-model-routing-tokenomics` covers every scenario
