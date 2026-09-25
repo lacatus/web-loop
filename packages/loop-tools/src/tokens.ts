@@ -402,7 +402,8 @@ export function buildReport(options: ReportOptions): TokenReport | undefined {
   // Parsed files: oldest session first; per session the main file, then its subagent files.
   const parsedFiles: Map<string, Response>[] = [];
   // With --change, orchestrator usage comes only from the session(s) that ran the change: main
-  // sessions that spawned at least one subagent whose prompt says `change=<id>`.
+  // sessions that spawned at least one subagent whose prompt says `change=<id>`. A second session
+  // that also works on the change (e.g. a concurrent `/review <id>`) counts too: its work is for it.
   const orchestrating = new Set<string>();
   for (const session of [...selected].reverse()) {
     const main = parseTranscript(readFileSync(session.path, 'utf8'), {
