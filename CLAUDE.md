@@ -14,8 +14,8 @@ the validator reviews it all like a strict PR reviewer, and `pnpm verify` is the
 /opsx:archive <id>          → delta specs merged into openspec/specs/, change moved to archive/
 ```
 
-Other commands: `/review <id> [base]` (validator only, as a PR review), `/verify [--fast]`, `/opsx:explore`,
-`/opsx:update <id>`.
+Other commands: `/review <id> [base]` (PR-style review without a worker: verify --summary → browser-qa → validator),
+`/verify [--fast]`, `/opsx:explore`, `/opsx:update <id>`.
 
 Agents (`.claude/agents/`): `worker` (writes code, no browser), `browser-qa` (drives the app with Playwright MCP,
 returns an evidence table) and `validator` (read-only, judges spec, diff, gates and evidence, no browser; returns
@@ -64,7 +64,7 @@ returns an evidence table) and `validator` (read-only, judges spec, diff, gates 
 ```bash
 pnpm install
 pnpm dev              # api :3001 + web :5173 (proxy /api), dev DB at apps/api/data/app.db
-pnpm review:serve     # same stack in the background on a fresh throwaway DB (validator); pnpm review:stop
+pnpm review:serve     # same stack in the background on a fresh throwaway DB (browser-qa); pnpm review:stop
 pnpm verify           # full gate;  pnpm verify:fast skips build + e2e;  --summary = compact output (agents)
 pnpm traceability     # scenario → test map
 pnpm db:generate      # generate a migration after editing schema.ts
@@ -82,12 +82,16 @@ Routing lives in `.claude/loop-policy.json`; agent frontmatter must match it (`p
 | browser-qa               | sonnet                                | medium | 40       | 1h        | yes            |
 | other subagents (ad hoc) | sonnet (`CLAUDE_CODE_SUBAGENT_MODEL`) | –      | –        | –         | –              |
 
-- `pnpm loop:route --change <id> --round <n>` → `opus` when design.md says `complexity: high` or the same blocking
-  finding survived two rounds, else `sonnet`. `/build-feature` passes it as the worker's model.
+- `pnpm loop:route --change <id> --round <n>` → `opus` when design.md declares `complexity: high` or the same
+  blocking finding survived two rounds, else `sonnet`. `/build-feature` passes it as the worker's model.
+  The complexity marker only counts when a **line starts with** `complexity: high` (case-insensitive; leading
+  spaces, `-`/`*`/`>` markers and `**…**` emphasis allowed); a mention inside a sentence does not escalate.
 - `pnpm tokens [--session <id> | --latest] [--change <id>] [--round <n>] [--format md|json] [--dir <dir>]` reports
   requests, input/output, cache write/read and cache-hit % per agent and model from Claude Code transcripts.
   Dollars are a **list-price estimate** (`packages/loop-tools/pricing.json`); this account is on a subscription.
-  Each round's review record ends with its `## Tokens` section.
+  With `--change` and no `--session` it reads every session of the project and names the ones it used.
+  `pnpm tokens --mark <change> <round> start|end` records a round's window in `reviews/.marks.json`; main-session
+  usage inside it is reported as `orchestrator rN`. Each round's review record ends with its `## Tokens` section.
 - Status line: `model · effort · ctx % · cache % · ~$ list` (`packages/loop-tools/src/statusline.ts`).
 - Habits: `/clear` between features; agents use `pnpm verify --summary` (full logs in `artifacts/verify/`) instead of
   streaming gate output into their context.

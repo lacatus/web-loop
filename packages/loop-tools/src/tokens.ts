@@ -5,8 +5,21 @@
  * <session>/subagents/agent-<id>.jsonl (+ agent-<id>.meta.json with the agent type).
  * Streaming writes the same `message.id` several times; the last record wins.
  * Dollars are list-price estimates only (subscription plans are not billed per token).
+ *
+ * Orchestrator attribution: `/build-feature` records each round's start/end time with
+ * `pnpm tokens --mark <change> <round> start|end` (openspec/changes/<id>/reviews/.marks.json).
+ * With `--change`, main-session responses whose `timestamp` falls in a round's window are
+ * reported as `orchestrator r<n>`; without `--session` every session in the project is read.
  */
-import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -98,9 +111,15 @@ export function defaultProjectsDir(home = homedir(), env = process.env): string 
 }
 
 interface Response {
+  /** Unique across sessions: `<session>:main` or `<session>:<agent id>`. */
   agentKey: string;
+  /** Raw agent id (fallback label), or `main`. */
+  agentId: string;
+  sessionId: string;
   model: string;
   usage: Usage;
+  /** ISO timestamp of the record that won the dedupe (the last one). */
+  timestamp?: string;
 }
 
 interface AgentInfo {
@@ -152,8 +171,18 @@ interface ParsedFile {
   firstSeen: string;
 }
 
+export interface TranscriptSource {
+  sessionId: string;
+  /** Agent id of a subagent file, or `main` for the session's main conversation. */
+  agentId: string;
+}
+
+export const agentKeyOf = (sessionId: string, agentId: string) => `${sessionId}:${agentId}`;
+
 /** Parses one transcript. Unknown records and malformed lines are ignored. */
-export function parseTranscript(text: string, agentKey: string): ParsedFile {
+export function parseTranscript(text: string, source: TranscriptSource): ParsedFile {
+  const { sessionId, agentId } = source;
+  const isMain = agentId === 'main';
   const responses = new Map<string, Response>();
   let firstPrompt: string | undefined;
   let attributionAgent: string | undefined;
@@ -180,15 +209,23 @@ export function parseTranscript(text: string, agentKey: string): ParsedFile {
     const model = typeof message.model === 'string' ? message.model : undefined;
     if (!usage || !model || model === '<synthetic>') continue;
     // Old transcripts kept subagent records in the main file as sidechains.
-    const key =
-      record.isSidechain === true && typeof record.agentId === 'string' && agentKey === 'main'
+    const owner =
+      record.isSidechain === true && typeof record.agentId === 'string' && isMain
         ? record.agentId
-        : agentKey;
+        : agentId;
     const id =
       (typeof message.id === 'string' && message.id) ||
       (typeof record.requestId === 'string' && record.requestId) ||
-      `anon-${agentKey}-${anon++}`;
-    responses.set(id, { agentKey: key, model, usage: usageFrom(usage) }); // last record wins
+      `anon-${agentKeyOf(sessionId, agentId)}-${anon++}`;
+    // last record wins
+    responses.set(id, {
+      agentKey: agentKeyOf(sessionId, owner),
+      agentId: owner,
+      sessionId,
+      model,
+      usage: usageFrom(usage),
+      timestamp: typeof record.timestamp === 'string' ? record.timestamp : undefined,
+    });
   }
   return { responses, firstPrompt, attributionAgent, firstSeen };
 }
@@ -217,6 +254,81 @@ export function listSessions(dir: string): SessionFile[] {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
+// ---------- round marks (orchestrator windows) ----------
+
+export const MARK_KINDS = ['start', 'end'] as const;
+export type MarkKind = (typeof MARK_KINDS)[number];
+
+const isoTimestamp = z.string().refine((v) => !Number.isNaN(Date.parse(v)), 'not an ISO timestamp');
+export const roundMarksSchema = z.object({
+  rounds: z.record(z.string(), z.object({ start: isoTimestamp, end: isoTimestamp.optional() })),
+});
+export type RoundMarks = z.infer<typeof roundMarksSchema>['rounds'];
+
+/** `openspec/changes/<change>/reviews/.marks.json` under the repository root. */
+export function marksPath(root: string, change: string): string {
+  return join(root, 'openspec/changes', change, 'reviews/.marks.json');
+}
+
+/** Reads a change's round marks; a missing file means no marks. Throws on a malformed file. */
+export function readMarks(path: string): RoundMarks {
+  if (!existsSync(path)) return {};
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`${path}: ${(error as Error).message}`, { cause: error });
+  }
+  const parsed = roundMarksSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`${path}: ${parsed.error.issues[0]?.message ?? 'invalid'}`);
+  return parsed.data.rounds;
+}
+
+/**
+ * Records the start or end of a round. `start` (re)opens the window and drops any old end;
+ * `end` needs an earlier start. Returns the written timestamp.
+ */
+export function writeMark(
+  root: string,
+  change: string,
+  round: string,
+  kind: MarkKind,
+  now: Date,
+): { path: string; timestamp: string } {
+  const changeDir = join(root, 'openspec/changes', change);
+  if (!existsSync(changeDir)) throw new Error(`no such change: ${changeDir}`);
+  const path = marksPath(root, change);
+  const rounds = readMarks(path);
+  const timestamp = now.toISOString();
+  if (kind === 'start') {
+    rounds[round] = { start: timestamp };
+  } else {
+    const window = rounds[round];
+    if (!window) throw new Error(`round ${round} of ${change} has no start mark`);
+    if (Date.parse(timestamp) < Date.parse(window.start)) {
+      throw new Error(`end ${timestamp} is before the start ${window.start} of round ${round}`);
+    }
+    rounds[round] = { start: window.start, end: timestamp };
+  }
+  mkdirSync(join(changeDir, 'reviews'), { recursive: true });
+  const sorted = Object.fromEntries(
+    Object.entries(rounds).sort(([a], [b]) => a.localeCompare(b, 'en', { numeric: true })),
+  );
+  writeFileSync(path, `${JSON.stringify({ rounds: sorted }, null, 2)}\n`);
+  return { path, timestamp };
+}
+
+/** The round whose [start, end] window (inclusive; open-ended while there is no end) holds `timestamp`. */
+export function roundAt(marks: RoundMarks, timestamp: string | undefined): string | undefined {
+  const t = timestamp === undefined ? Number.NaN : Date.parse(timestamp);
+  if (Number.isNaN(t)) return undefined;
+  for (const [round, w] of Object.entries(marks)) {
+    const end = w.end === undefined ? Number.POSITIVE_INFINITY : Date.parse(w.end);
+    if (t >= Date.parse(w.start) && t <= end) return round;
+  }
+  return undefined;
+}
+
 // ---------- report ----------
 
 export interface ReportRow {
@@ -230,6 +342,7 @@ export interface ReportRow {
 
 export interface TokenReport {
   dir: string;
+  /** Sessions that contributed usage to the report, oldest first. */
   sessions: string[];
   rows: ReportRow[];
   total: Usage & { cacheHitPercent?: number; listPriceUsd: number; unpricedModels: string[] };
@@ -239,105 +352,146 @@ export interface TokenReport {
 export interface ReportOptions {
   dir: string;
   session?: string;
-  /** Only subagents whose prompt says `change=<id>`. */
+  /** Only the most recent session, even with `change` (default with `change`: every session). */
+  latest?: boolean;
+  /** Only subagents whose prompt says `change=<id>`, plus orchestrator usage inside `marks`. */
   change?: string;
-  /** Only subagents whose prompt says `round=<n>`. */
+  /** Only subagents whose prompt says `round=<n>` (and that round's orchestrator window). */
   round?: string;
+  /** The change's round windows; main-session usage inside one becomes `orchestrator r<n>`. */
+  marks?: RoundMarks;
   pricing?: Pricing;
+}
+
+/** Which sessions a report reads: `--session`, else every session for `--change`, else the latest. */
+export function selectSessions(sessions: SessionFile[], options: ReportOptions): SessionFile[] {
+  if (options.session) return sessions.filter((s) => s.sessionId === options.session);
+  if (options.change !== undefined && !options.latest) return sessions;
+  return sessions.slice(0, 1);
+}
+
+function readAgentType(metaPath: string): string | undefined {
+  if (!existsSync(metaPath)) return undefined;
+  try {
+    const meta = obj(JSON.parse(readFileSync(metaPath, 'utf8')));
+    return typeof meta?.agentType === 'string' ? meta.agentType : undefined;
+  } catch {
+    return undefined; // tolerate malformed metadata
+  }
 }
 
 /** Builds the report, or returns undefined when no usage is found. */
 export function buildReport(options: ReportOptions): TokenReport | undefined {
   const pricing = options.pricing ?? DEFAULT_PRICING;
-  const sessions = listSessions(options.dir);
-  const selected = options.session
-    ? sessions.filter((s) => s.sessionId === options.session)
-    : sessions.slice(0, 1);
-  const session = selected[0];
-  if (!session) return undefined;
+  const selected = selectSessions(listSessions(options.dir), options);
+  if (selected.length === 0) return undefined;
 
   const agents = new Map<string, AgentInfo>();
+  // Keyed by response id across all sessions: a resumed session that repeats earlier
+  // responses still counts each of them once.
   const responses = new Map<string, Response>();
-  const main = parseTranscript(readFileSync(session.path, 'utf8'), 'main');
-  agents.set('main', { key: 'main', label: 'main', firstSeen: '', isMain: true });
-  for (const [id, r] of main.responses) responses.set(id, r);
-
-  const subDir = join(options.dir, session.sessionId, 'subagents');
-  const subFiles = existsSync(subDir)
-    ? readdirSync(subDir).filter((f) => /^agent-.+\.jsonl$/.test(f))
-    : [];
-  for (const f of subFiles) {
-    const id = f.replace(/^agent-/, '').replace(/\.jsonl$/, '');
-    const parsed = parseTranscript(readFileSync(join(subDir, f), 'utf8'), id);
-    const metaPath = join(subDir, `agent-${id}.meta.json`);
-    let agentType: string | undefined;
-    if (existsSync(metaPath)) {
-      try {
-        const meta = obj(JSON.parse(readFileSync(metaPath, 'utf8')));
-        if (typeof meta?.agentType === 'string') agentType = meta.agentType;
-      } catch {
-        // tolerate malformed metadata
-      }
-    }
-    agentType ??= parsed.attributionAgent;
-    const { change, round } = parseRoundPrompt(parsed.firstPrompt);
-    const base = agentType ?? `agent-${id}`;
-    agents.set(id, {
-      key: id,
-      label: round ? `${base} r${round}` : base,
-      agentType,
-      change,
-      round,
-      firstSeen: parsed.firstSeen,
-      isMain: false,
+  // Oldest session first, so that for a repeated id the newest record wins.
+  for (const session of [...selected].reverse()) {
+    const main = parseTranscript(readFileSync(session.path, 'utf8'), {
+      sessionId: session.sessionId,
+      agentId: 'main',
     });
-    for (const [rid, r] of parsed.responses) responses.set(rid, r);
-  }
+    const mainKey = agentKeyOf(session.sessionId, 'main');
+    agents.set(mainKey, { key: mainKey, label: 'main', firstSeen: '', isMain: true });
+    for (const [id, r] of main.responses) responses.set(id, r);
 
-  // A session that built several changes would merge e.g. two "worker r1" rows: qualify them.
-  const changes = new Set([...agents.values()].map((a) => a.change).filter(Boolean));
-  if (changes.size > 1) {
-    for (const a of agents.values()) {
-      if (a.change && a.round) a.label = `${a.label} (${a.change})`;
+    const subDir = join(options.dir, session.sessionId, 'subagents');
+    const subFiles = existsSync(subDir)
+      ? readdirSync(subDir).filter((f) => /^agent-.+\.jsonl$/.test(f))
+      : [];
+    for (const f of subFiles) {
+      const id = f.replace(/^agent-/, '').replace(/\.jsonl$/, '');
+      const parsed = parseTranscript(readFileSync(join(subDir, f), 'utf8'), {
+        sessionId: session.sessionId,
+        agentId: id,
+      });
+      const agentType =
+        readAgentType(join(subDir, `agent-${id}.meta.json`)) ?? parsed.attributionAgent;
+      const { change, round } = parseRoundPrompt(parsed.firstPrompt);
+      const base = agentType ?? `agent-${id}`;
+      const key = agentKeyOf(session.sessionId, id);
+      agents.set(key, {
+        key,
+        label: round ? `${base} r${round}` : base,
+        agentType,
+        change,
+        round,
+        firstSeen: parsed.firstSeen,
+        isMain: false,
+      });
+      for (const [rid, r] of parsed.responses) responses.set(rid, r);
     }
   }
 
   const filtered = options.change !== undefined || options.round !== undefined;
-  const include = (a: AgentInfo | undefined): a is AgentInfo =>
-    !!a &&
-    (!filtered ||
-      (!a.isMain &&
-        (options.change === undefined || a.change === options.change) &&
-        (options.round === undefined || a.round === options.round)));
+  const marks = options.change !== undefined ? (options.marks ?? {}) : {};
 
-  // Aggregate per (label, model); keep main first, then agents in the order they started.
-  const groups = new Map<string, { info: AgentInfo; model: string; usage: Usage }>();
-  for (const r of responses.values()) {
+  /** The row a response belongs to, or undefined when the filters exclude it. */
+  const attribute = (r: Response): AgentInfo | undefined => {
     const info = agents.get(r.agentKey) ?? {
       key: r.agentKey,
-      label: `agent-${r.agentKey}`,
+      label: `agent-${r.agentId}`,
       firstSeen: '',
       isMain: false,
     };
-    if (!include(info)) continue;
-    const k = `${info.label}\u0000${r.model}`;
-    const g = groups.get(k) ?? { info, model: r.model, usage: emptyUsage() };
+    if (!filtered) return info;
+    if (info.isMain) {
+      const round = roundAt(marks, r.timestamp);
+      if (round === undefined || (options.round !== undefined && round !== options.round)) {
+        return undefined;
+      }
+      return {
+        key: `orchestrator:${round}`,
+        label: `orchestrator r${round}`,
+        change: options.change,
+        round,
+        firstSeen: marks[round]?.start ?? '',
+        isMain: false,
+      };
+    }
+    const keep =
+      (options.change === undefined || info.change === options.change) &&
+      (options.round === undefined || info.round === options.round);
+    return keep ? info : undefined;
+  };
+
+  const included: { r: Response; info: AgentInfo }[] = [];
+  for (const r of responses.values()) {
+    const info = attribute(r);
+    if (info) included.push({ r, info });
+  }
+  if (included.length === 0) return undefined;
+
+  // A report that spans several changes would merge e.g. two "worker r1" rows: qualify them.
+  const changes = new Set(included.map((x) => x.info.change).filter(Boolean));
+  const labelOf = (a: AgentInfo) =>
+    changes.size > 1 && a.change && a.round ? `${a.label} (${a.change})` : a.label;
+
+  // Aggregate per (label, model); keep main first, then agents in the order they started.
+  const groups = new Map<string, { info: AgentInfo; label: string; model: string; usage: Usage }>();
+  for (const { r, info } of included) {
+    const label = labelOf(info);
+    const k = `${label}\u0000${r.model}`;
+    const g = groups.get(k) ?? { info, label, model: r.model, usage: emptyUsage() };
     g.usage = addUsage(g.usage, r.usage);
     if (info.firstSeen && (!g.info.firstSeen || info.firstSeen < g.info.firstSeen)) g.info = info;
     groups.set(k, g);
   }
-  if (groups.size === 0) return undefined;
 
   const ordered = [...groups.values()].sort((a, b) => {
     if (a.info.isMain !== b.info.isMain) return a.info.isMain ? -1 : 1;
-    return (
-      a.info.firstSeen.localeCompare(b.info.firstSeen) ||
-      a.info.label.localeCompare(b.info.label) ||
-      a.model.localeCompare(b.model)
-    );
+    const at = Date.parse(a.info.firstSeen);
+    const bt = Date.parse(b.info.firstSeen);
+    const byTime = (Number.isNaN(at) ? 0 : at) - (Number.isNaN(bt) ? 0 : bt);
+    return byTime || a.label.localeCompare(b.label) || a.model.localeCompare(b.model);
   });
   const rows: ReportRow[] = ordered.map((g) => ({
-    agent: g.info.label,
+    agent: g.label,
     model: g.model,
     usage: g.usage,
     cacheHitPercent: cacheHitPercent(g.usage),
@@ -347,9 +501,13 @@ export function buildReport(options: ReportOptions): TokenReport | undefined {
   const unpricedModels = [
     ...new Set(rows.filter((r) => r.listPriceUsd === undefined).map((r) => r.model)),
   ];
+  const contributing = new Set(included.map((x) => x.r.sessionId));
   return {
     dir: options.dir,
-    sessions: selected.map((s) => s.sessionId),
+    sessions: [...selected]
+      .reverse()
+      .map((s) => s.sessionId)
+      .filter((id) => contributing.has(id)),
     rows,
     total: {
       ...totalUsage,
@@ -416,9 +574,15 @@ function footnote(report: TokenReport): string {
   );
 }
 
+/** `session a` or `sessions a, b` (a change total may span several sessions). */
+function sessionsLabel(report: TokenReport, quote: (s: string) => string): string {
+  const noun = report.sessions.length === 1 ? 'session' : 'sessions';
+  return `${noun} ${report.sessions.map(quote).join(', ')}`;
+}
+
 export function renderText(report: TokenReport): string {
   return [
-    `Token usage — session ${report.sessions.join(', ')}`,
+    `Token usage — ${sessionsLabel(report, (s) => s)}`,
     '',
     ...textTable(REPORT_HEADER, reportRows(report, false)),
     '',
@@ -433,9 +597,11 @@ export function renderMarkdown(report: TokenReport, heading = '## Tokens'): stri
     '',
     ...markdownTable(REPORT_HEADER, reportRows(report, true)),
     '',
-    `_Session \`${report.sessions.join(', ')}\`. ${footnote(report)}_`,
+    `_${capitalize(sessionsLabel(report, (s) => `\`${s}\``))}. ${footnote(report)}_`,
   ].join('\n');
 }
+
+const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function renderJson(report: TokenReport): string {
   return JSON.stringify(report, null, 2);
@@ -452,19 +618,53 @@ export function appendSection(path: string, section: string): void {
 // ---------- CLI ----------
 
 export interface TokensCliEnv {
+  /** Repository root: names the transcript directory and holds openspec/changes. */
   cwd: string;
   home?: string;
   env?: NodeJS.ProcessEnv;
+  /** Clock for `--mark` (tests). */
+  now?: () => Date;
 }
 
 export const TOKENS_USAGE =
   'usage: pnpm tokens [--latest | --session <id>] [--dir <transcripts dir>] ' +
-  '[--change <id>] [--round <n>] [--format text|md|json] [--append <file>]';
+  '[--change <id>] [--round <n>] [--format text|md|json] [--append <file>]\n' +
+  '       pnpm tokens --mark <change> <round> start|end';
+
+const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function markCli(positionals: string[], ctx: TokensCliEnv, io: Io): number {
+  const [change = '', round = '', kind = ''] = positionals;
+  if (
+    positionals.length !== 3 ||
+    !SAFE_ID.test(change) ||
+    !SAFE_ID.test(round) ||
+    !(MARK_KINDS as readonly string[]).includes(kind)
+  ) {
+    io.err(TOKENS_USAGE);
+    return 2;
+  }
+  try {
+    const { path, timestamp } = writeMark(
+      ctx.cwd,
+      change,
+      round,
+      kind as MarkKind,
+      (ctx.now ?? (() => new Date()))(),
+    );
+    io.out(`Marked ${change} round ${round} ${kind} at ${timestamp} (${path})`);
+    return 0;
+  } catch (error) {
+    io.err(`pnpm tokens --mark: ${(error as Error).message}`);
+    return 2;
+  }
+}
 
 export function tokensCli(argv: string[], ctx: TokensCliEnv, io: Io): number {
   let values;
+  let positionals: string[];
   try {
-    ({ values } = parseArgs({
+    ({ values, positionals } = parseArgs({
       args: argv,
       options: {
         latest: { type: 'boolean' },
@@ -474,9 +674,10 @@ export function tokensCli(argv: string[], ctx: TokensCliEnv, io: Io): number {
         round: { type: 'string' },
         format: { type: 'string', default: 'text' },
         append: { type: 'string' },
+        mark: { type: 'boolean' },
         help: { type: 'boolean' },
       },
-      allowPositionals: false,
+      allowPositionals: true,
     }));
   } catch (error) {
     io.err(`${(error as Error).message}\n${TOKENS_USAGE}`);
@@ -486,21 +687,46 @@ export function tokensCli(argv: string[], ctx: TokensCliEnv, io: Io): number {
     io.out(TOKENS_USAGE);
     return 0;
   }
+  if (values.mark) return markCli(positionals, ctx, io);
   const format = values.format ?? 'text';
-  if (!['text', 'md', 'json'].includes(format) || (values.latest && values.session)) {
+  if (
+    positionals.length > 0 ||
+    !['text', 'md', 'json'].includes(format) ||
+    (values.latest && values.session)
+  ) {
     io.err(TOKENS_USAGE);
     return 2;
   }
   const dir = values.dir ?? join(defaultProjectsDir(ctx.home, ctx.env), projectDirName(ctx.cwd));
-  const report = buildReport({
+  let marks: RoundMarks = {};
+  if (values.change !== undefined) {
+    if (!SAFE_ID.test(values.change)) {
+      io.err(TOKENS_USAGE);
+      return 2;
+    }
+    try {
+      marks = readMarks(marksPath(ctx.cwd, values.change));
+    } catch (error) {
+      io.err(`pnpm tokens: ${(error as Error).message}`);
+      return 2;
+    }
+  }
+  const options: ReportOptions = {
     dir,
     session: values.session,
+    latest: values.latest,
     change: values.change,
     round: values.round,
-  });
+    marks,
+  };
+  const report = buildReport(options);
   if (!report) {
     const scope = [
-      values.session ? `session ${values.session}` : 'latest session',
+      values.session
+        ? `session ${values.session}`
+        : values.change !== undefined && !values.latest
+          ? 'all sessions'
+          : 'latest session',
       values.change ? `change ${values.change}` : '',
       values.round ? `round ${values.round}` : '',
     ]

@@ -5,10 +5,12 @@
  *   pnpm verify --fast         skip build + e2e (inner-loop speed)
  *   pnpm verify --keep-going   run every gate even after a failure
  *   pnpm verify --summary      full output to artifacts/verify/<gate>.log; print only the summary
- *                              table plus the last 40 lines and log path of failing gates (agents)
+ *                              table plus the last 40 lines and log path of failing gates (agents).
+ *                              Logs of earlier runs are removed first; quiet pnpm/npm settings
+ *                              (e.g. from `pnpm -s verify`) are not passed to the gates.
  */
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { Io } from './io';
 
@@ -65,6 +67,34 @@ export function tail(text: string, lines: number): string[] {
   return all.slice(Math.max(0, all.length - lines));
 }
 
+/**
+ * pnpm/npm settings that silence nested `pnpm -r` output. `pnpm -s verify` exports e.g.
+ * `npm_config_reporter=silent` to its children, which would leave summary-mode logs empty.
+ */
+export const QUIET_ENV_PATTERN = /^(npm|pnpm)_config_(reporter|loglevel|silent)$/i;
+
+/** The gate child environment: summary mode drops colour forcing and quiet pnpm/npm settings. */
+export function gateEnv(base: NodeJS.ProcessEnv, summary: boolean): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, OPENSPEC_TELEMETRY: '0' };
+  if (!summary) return { ...env, FORCE_COLOR: base.FORCE_COLOR ?? '1' };
+  // Logs read by agents stay free of ANSI escapes because gate output goes to a file (no TTY),
+  // so tools choose plain output themselves. Both colour variables are removed rather than set:
+  // Node warns in every child that sees NO_COLOR and FORCE_COLOR together, and Playwright
+  // re-adds FORCE_COLOR=1 for its web servers and workers.
+  delete env.FORCE_COLOR;
+  delete env.NO_COLOR;
+  for (const key of Object.keys(env)) if (QUIET_ENV_PATTERN.test(key)) delete env[key];
+  return env;
+}
+
+/** Summary mode: removes logs of earlier runs so every log in the directory is from this run. */
+function clearLogs(logDir: string): void {
+  mkdirSync(logDir, { recursive: true });
+  for (const f of readdirSync(logDir)) {
+    if (f.endsWith('.log')) rmSync(join(logDir, f), { force: true });
+  }
+}
+
 export function runVerify(options: VerifyOptions): number {
   const { cwd, io, fast = false, keepGoing = false, summary = false } = options;
   const gates = (options.gates ?? DEFAULT_GATES).filter((g) => !(fast && g.slow));
@@ -74,15 +104,8 @@ export function runVerify(options: VerifyOptions): number {
   const green = (s: string) => (color ? `\x1b[32m${s}\x1b[0m` : s);
   const red = (s: string) => (color ? `\x1b[31m${s}\x1b[0m` : s);
 
-  const env: NodeJS.ProcessEnv = {
-    ...(options.env ?? process.env),
-    OPENSPEC_TELEMETRY: '0',
-    // Logs read by agents stay free of ANSI escapes; humans keep colours.
-    ...(summary
-      ? { FORCE_COLOR: '0', NO_COLOR: '1' }
-      : { FORCE_COLOR: process.env.FORCE_COLOR ?? '1' }),
-  };
-  if (summary) mkdirSync(logDir, { recursive: true });
+  const env = gateEnv(options.env ?? process.env, summary);
+  if (summary) clearLogs(logDir);
 
   const results: GateResult[] = [];
   for (const gate of gates) {

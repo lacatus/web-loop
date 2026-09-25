@@ -25,11 +25,23 @@ returned by `pnpm loop:route`. Every subagent prompt MUST start with `key=value`
 4. Record the base for the review diff: `BASE=$(git rev-parse HEAD)`. Mention it in your
    first message.
 5. `mkdir -p openspec/changes/<change>/reviews`.
-6. Decide whether the change has UI-observable scenarios (read its `specs/**/spec.md`: a
+6. **First round.** If `openspec/changes/<change>/reviews/` already holds `round-<N>.md` files
+   (a resumed build, e.g. after a spec-gap stop), the first round of this run is the highest
+   such N + 1; otherwise it is 1. Only `round-<N>.md` counts (not `standalone-*.md`). Say in
+   your first message which round you start at. Never overwrite an existing round record.
+7. Decide whether the change has UI-observable scenarios (read its `specs/**/spec.md`: a
    scenario is UI-observable when its WHEN/THEN happen in the web app). If none are, browser QA
    is skipped for every round; say so in your first message.
 
-## 1. Loop — for round = 1 … max-rounds
+## 1. Loop — for round = first … first + max-rounds − 1
+
+max-rounds counts the rounds run by this invocation, starting at the first round from 0.6.
+
+**Start mark.** Before anything else in the round, record its start so the report can attribute
+your own (orchestrator) usage to it:
+```
+pnpm -s tokens --mark <change> <n> start
+```
 
 **a. Route.** `pnpm -s loop:route --change <change> --round <n>`. The first line is the worker
 model (`sonnet` or `opus`), the second its reason. Keep both for the record.
@@ -66,14 +78,17 @@ The validator must be a fresh agent every round (independent review, no shared c
 
 **f. Record.** Write `openspec/changes/<change>/reviews/round-<n>.md`: the validator's full
 final output, then `## Browser QA` (the evidence, incl. any re-check), then `## Worker report`
-(the first line `Routing: worker on <model> — <reason>`, then the worker's report). Then append
-the round's token usage so the file **ends** with a `## Tokens` section:
+(the first line `Routing: worker on <model> — <reason>`, then the worker's report). Then close
+the round's window and append its token usage so the file **ends** with a `## Tokens` section:
 ```
+pnpm -s tokens --mark <change> <n> end
 pnpm -s tokens --change <change> --round <n> --format md --append openspec/changes/<change>/reviews/round-<n>.md
 ```
-It has one row per agent that ran in the round (worker, browser-qa, validator) with requests,
+It has one row per agent that ran in the round — `orchestrator r<n>` (your main-session usage
+between the round's start and end marks), worker, browser-qa, validator — with requests,
 input, output, cache write, cache read, cache-hit % and the list-price estimate. This file is
-the PR thread for the round.
+the PR thread for the round. (The marks live in `reviews/.marks.json`; keep that file with the
+reviews.)
 
 **g. Decide** from the first line (`VERDICT: …`):
 - `APPROVE` → go to **2. Done**.
@@ -93,9 +108,12 @@ Report to the user:
 - rounds taken and a one-line summary per round (from the review files), including the worker
   model and routing reason per round
 - the final scenario verification table from the approving review
-- token usage totalled across all rounds of this change:
-  `pnpm -s tokens --change <change> --format md` (one row per agent and round plus a total;
-  dollars are a list-price estimate — the account is on a subscription plan)
+- token usage totalled across all rounds of this change, including rounds run in earlier
+  sessions and the orchestrator rows:
+  `pnpm -s tokens --change <change> --format md` (no `--session`: it reads every session in the
+  project and names the ones it used; one row per agent and round — `orchestrator rN`, worker,
+  browser-qa, validator — plus a total; dollars are a list-price estimate — the account is on a
+  subscription plan)
 - `git diff --stat <BASE>`
 - next steps: review the diff, then `/opsx:archive <change>` to merge the delta into
   `openspec/specs/`, then commit.

@@ -64,8 +64,9 @@ after its scenario.
    → the change's delta specs are merged into openspec/specs/
 ```
 
-Also available: `/review <change>` (validator only, e.g. on work you wrote yourself),
-`/verify`, `/opsx:explore`, `/opsx:update`.
+Also available: `/review <change>` (a PR-style review without a worker — verify summary,
+browser-qa evidence and the validator — e.g. on work you wrote yourself), `/verify`,
+`/opsx:explore`, `/opsx:update`.
 
 ## Quality gates
 
@@ -99,15 +100,23 @@ Each agent runs on the cheapest model that does its job well. The routing policy
 
 - **Escalation** — `pnpm loop:route --change <id> --round <n>` prints `opus` when the change's
   `design.md` declares `complexity: high` or the same blocking finding appears in both previous
-  reviews, otherwise `sonnet`, plus the reason.
+  reviews, otherwise `sonnet`, plus the reason. The declaration must be a line that **starts
+  with** `complexity: high` (case-insensitive; leading spaces, `-`/`*`/`>` markers and `**…**`
+  emphasis are allowed) — the phrase inside a sentence does not escalate.
 - **Token report** — `pnpm tokens` reads Claude Code transcripts
   (`~/.claude/projects/<project>/<session>.jsonl` + `subagents/`) and prints requests, input,
   output, cache write, cache read and cache-hit % per agent and model, then a list-price estimate.
   Flags: `--latest` (default) / `--session <id>`, `--change <id>`, `--round <n>`,
-  `--format text|md|json`, `--dir <transcripts dir>`, `--append <file>`. Prices are in
+  `--format text|md|json`, `--dir <transcripts dir>`, `--append <file>`. With `--change` and no
+  `--session`, every session of the project is read (a change resumed in a new session is still
+  totalled) and the report names the sessions it used. Prices are in
   `packages/loop-tools/pricing.json` (with source and date); unknown models show as `unpriced`.
   Dollars are estimates only — on a subscription plan, tokens and cache-hit % are what matter.
-  `/build-feature` appends a `## Tokens` section to every round's review and totals the change.
+- **Orchestrator cost** — `/build-feature` runs `pnpm tokens --mark <change> <round> start|end`
+  around each round (ISO timestamps in `openspec/changes/<id>/reviews/.marks.json`); main-session
+  usage inside a round's window is reported as `orchestrator rN`. Every round's review ends with a
+  `## Tokens` section (orchestrator, worker, browser-qa, validator) and the final report totals the
+  change across rounds and sessions.
 - **Status line** — `model · effort · ctx % · cache % · ~$ list`, wired in `.claude/settings.json`.
 - **Habits** — `/clear` between features; agents use `pnpm verify --summary` rather than streaming
   full gate logs into their context.

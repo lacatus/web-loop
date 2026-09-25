@@ -195,3 +195,275 @@ describe('pnpm tokens', () => {
     expect(section).toContain('list-price est.');
   });
 });
+
+// ---------- multi-session changes and orchestrator attribution ----------
+
+interface Reply {
+  id: string;
+  ts: string;
+  output: number;
+  model?: string;
+  input?: number;
+}
+
+const reply = (r: Reply) =>
+  JSON.stringify({
+    type: 'assistant',
+    timestamp: r.ts,
+    requestId: `req_${r.id}`,
+    message: {
+      id: r.id,
+      model: r.model ?? 'claude-opus-5-5',
+      role: 'assistant',
+      usage: {
+        input_tokens: r.input ?? 1,
+        output_tokens: r.output,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+      },
+    },
+  });
+
+const prompt = (ts: string, text: string) =>
+  JSON.stringify({ type: 'user', timestamp: ts, message: { role: 'user', content: text } });
+
+interface SubagentFixture {
+  type: string;
+  lines: string[];
+}
+
+/** Writes `<session>.jsonl` (main) and `<session>/subagents/agent-<id>.{jsonl,meta.json}`. */
+function writeSession(
+  dir: string,
+  sessionId: string,
+  mtime: string,
+  main: string[],
+  subagents: Record<string, SubagentFixture> = {},
+) {
+  mkdirSync(dir, { recursive: true });
+  const mainPath = join(dir, `${sessionId}.jsonl`);
+  writeFileSync(mainPath, `${main.join('\n')}\n`);
+  const subDir = join(dir, sessionId, 'subagents');
+  for (const [id, sub] of Object.entries(subagents)) {
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(join(subDir, `agent-${id}.jsonl`), `${sub.lines.join('\n')}\n`);
+    writeFileSync(join(subDir, `agent-${id}.meta.json`), JSON.stringify({ agentType: sub.type }));
+  }
+  utimesSync(mainPath, new Date(mtime), new Date(mtime));
+}
+
+/**
+ * A change `demo` whose round 1 ran in session `sess-a` and round 2 in session `sess-b`
+ * (resumed after a spec-gap stop), plus a newer unrelated session `sess-c`.
+ * The repo root holds the change folder so that `--mark` can record round windows.
+ */
+function splitChange() {
+  const root = mkdtempSync(join(tmpdir(), 'loop-split-'));
+  mkdirSync(join(root, 'openspec/changes/demo'), { recursive: true });
+  const dir = join(root, 'transcripts');
+  writeSession(
+    dir,
+    'sess-a',
+    '2026-09-24T11:00:00Z',
+    [
+      prompt('2026-09-24T09:59:00Z', '/build-feature demo'),
+      reply({ id: 'a_before', ts: '2026-09-24T09:59:59.999Z', output: 1 }), // before r1 start
+      reply({ id: 'a_at_start', ts: '2026-09-24T10:00:00.000Z', output: 10 }), // == start
+      reply({ id: 'a_stream', ts: '2026-09-24T10:10:00Z', output: 5 }), // streamed…
+      reply({ id: 'a_stream', ts: '2026-09-24T10:10:01Z', output: 100 }), // …last record wins
+      reply({ id: 'a_at_end', ts: '2026-09-24T10:30:00.000Z', output: 1000 }), // == end
+      reply({ id: 'a_after', ts: '2026-09-24T10:30:00.001Z', output: 10000 }), // after r1 end
+    ],
+    {
+      w1: {
+        type: 'worker',
+        lines: [
+          prompt('2026-09-24T10:01:00Z', 'change=demo\nround=1'),
+          reply({ id: 'w1', ts: '2026-09-24T10:01:01Z', output: 2, model: 'claude-sonnet-5' }),
+        ],
+      },
+      v1: {
+        type: 'validator',
+        lines: [
+          prompt('2026-09-24T10:20:00Z', 'change=demo\nbase=abc\nround=1'),
+          reply({ id: 'v1', ts: '2026-09-24T10:20:01Z', output: 3 }),
+        ],
+      },
+      o1: {
+        type: 'worker',
+        lines: [
+          prompt('2026-09-24T10:40:00Z', 'change=other\nround=1'),
+          reply({ id: 'o1', ts: '2026-09-24T10:40:01Z', output: 7, model: 'claude-sonnet-5' }),
+        ],
+      },
+    },
+  );
+  writeSession(
+    dir,
+    'sess-b',
+    '2026-09-25T12:00:00Z',
+    [
+      prompt('2026-09-25T10:59:00Z', '/build-feature demo'),
+      // A resumed session repeats earlier records: the same response is still counted once.
+      reply({ id: 'a_stream', ts: '2026-09-24T10:10:01Z', output: 100 }),
+      reply({ id: 'b_in', ts: '2026-09-25T11:05:00Z', output: 20 }),
+      reply({ id: 'b_after', ts: '2026-09-25T11:45:00Z', output: 30000 }),
+    ],
+    {
+      w2: {
+        type: 'worker',
+        lines: [
+          prompt('2026-09-25T11:01:00Z', 'change=demo\nround=2\nreview=…/round-1.md'),
+          reply({ id: 'w2', ts: '2026-09-25T11:01:01Z', output: 4, model: 'claude-sonnet-5' }),
+        ],
+      },
+      v2: {
+        type: 'validator',
+        lines: [
+          prompt('2026-09-25T11:20:00Z', 'change=demo\nbase=abc\nround=2'),
+          reply({ id: 'v2', ts: '2026-09-25T11:20:01Z', output: 6 }),
+        ],
+      },
+    },
+  );
+  writeSession(dir, 'sess-c', '2026-09-25T13:00:00Z', [
+    reply({ id: 'c_chat', ts: '2026-09-25T12:30:00Z', output: 50000 }),
+  ]);
+
+  const cli = (argv: string[], now?: string) => {
+    const io = memoryIo();
+    const code = tokensCli(
+      argv,
+      { cwd: root, home: root, env: {}, now: now ? () => new Date(now) : undefined },
+      io,
+    );
+    return { code, out: io.stdout.join('\n'), err: io.stderr.join('\n') };
+  };
+  const report = (argv: string[]) => {
+    const { code, out } = cli([...argv, '--dir', dir, '--format', 'json']);
+    expect(code).toBe(0);
+    return JSON.parse(out) as TokenReport;
+  };
+  const mark = (round: string, kind: string, now: string) => {
+    const r = cli(['--mark', 'demo', round, kind], now);
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+  };
+  return { root, dir, cli, report, mark };
+}
+
+const byAgent = (report: TokenReport) =>
+  Object.fromEntries(report.rows.map((r) => [r.agent, r.usage.output]));
+
+describe('pnpm tokens across sessions and rounds', () => {
+  it('Scenario: Change total spans sessions — --change without --session includes the rounds of both sessions and names both', () => {
+    const { dir, cli, report } = splitChange();
+
+    const total = report(['--change', 'demo']);
+    expect(total.sessions).toEqual(['sess-a', 'sess-b']); // sess-c has no usage for demo
+    expect(byAgent(total)).toEqual({
+      'worker r1': 2,
+      'validator r1': 3,
+      'worker r2': 4,
+      'validator r2': 6,
+    });
+    expect(total.total.requests).toBe(4);
+    expect(total.total.output).toBe(2 + 3 + 4 + 6);
+
+    // Both sessions are named in the text and markdown output.
+    const text = cli(['--change', 'demo', '--dir', dir]).out;
+    expect(text).toContain('Token usage — sessions sess-a, sess-b');
+    const md = cli(['--change', 'demo', '--dir', dir, '--format', 'md']).out;
+    expect(md).toContain('_Sessions `sess-a`, `sess-b`.');
+    expect(md).toMatch(/^\| worker r1 \|/m);
+    expect(md).toMatch(/^\| validator r2 \|/m);
+
+    // --latest and --session still narrow it to one session; without --change the default stays the latest.
+    expect(cli(['--change', 'demo', '--latest', '--dir', dir]).out).toMatch(/^No usage found/);
+    expect(report(['--change', 'demo', '--session', 'sess-a']).sessions).toEqual(['sess-a']);
+    expect(report([]).sessions).toEqual(['sess-c']);
+    expect(cli(['--change', 'nope', '--dir', dir]).out).toContain(
+      `No usage found (all sessions, change nope) in ${dir}`,
+    );
+  });
+
+  it('Scenario: Orchestrator usage is attributed to its round — exactly the main-session usage inside the start/end window, deduped', () => {
+    const { root, cli, report, mark } = splitChange();
+    mark('1', 'start', '2026-09-24T10:00:00.000Z');
+    mark('1', 'end', '2026-09-24T10:30:00.000Z');
+    mark('2', 'start', '2026-09-25T11:00:00.000Z');
+    mark('2', 'end', '2026-09-25T11:30:00.000Z');
+    const marks = JSON.parse(
+      readFileSync(join(root, 'openspec/changes/demo/reviews/.marks.json'), 'utf8'),
+    ) as unknown;
+    expect(marks).toEqual({
+      rounds: {
+        '1': { start: '2026-09-24T10:00:00.000Z', end: '2026-09-24T10:30:00.000Z' },
+        '2': { start: '2026-09-25T11:00:00.000Z', end: '2026-09-25T11:30:00.000Z' },
+      },
+    });
+
+    const r1 = report(['--change', 'demo', '--round', '1']);
+    expect(r1.rows.map((r) => r.agent)).toEqual(['orchestrator r1', 'worker r1', 'validator r1']);
+    const orch1 = r1.rows.find((r) => r.agent === 'orchestrator r1');
+    // Inside (boundaries inclusive): a_at_start 10 + a_stream 100 (streamed twice, and repeated
+    // in the resumed sess-b, counted once) + a_at_end 1000. Outside: a_before, a_after.
+    expect(orch1?.model).toBe('claude-opus-5-5');
+    expect(orch1?.usage).toMatchObject({ requests: 3, input: 3, output: 1110 });
+
+    const r2 = report(['--change', 'demo', '--round', '2']);
+    expect(byAgent(r2)).toEqual({ 'orchestrator r2': 20, 'worker r2': 4, 'validator r2': 6 });
+    expect(r2.rows[0]?.usage.requests).toBe(1);
+
+    // The change total carries every round's orchestrator row; usage outside all windows
+    // (a_before, a_after, b_after, the unrelated sess-c) is not in it.
+    const total = report(['--change', 'demo']);
+    expect(total.rows.map((r) => r.agent)).toEqual([
+      'orchestrator r1',
+      'worker r1',
+      'validator r1',
+      'orchestrator r2',
+      'worker r2',
+      'validator r2',
+    ]);
+    expect(total.total.output).toBe(1110 + 2 + 3 + 20 + 4 + 6);
+    expect(total.total.requests).toBe(3 + 1 + 1 + 1 + 1 + 1);
+
+    // The round record gets the orchestrator row too.
+    const review = join(root, 'openspec/changes/demo/reviews/round-1.md');
+    writeFileSync(review, 'VERDICT: APPROVE\n');
+    const round1 = ['--change', 'demo', '--round', '1', '--dir', join(root, 'transcripts')];
+    expect(cli([...round1, '--append', review]).out).toMatch(
+      /^orchestrator r1\s+claude-opus-5-5\s+3\s/m,
+    );
+    const section = readFileSync(review, 'utf8');
+    expect(section).toMatch(/^\| orchestrator r1 \| claude-opus-5-5 \| 3 \|/m);
+    expect(section.indexOf('| orchestrator r1 |')).toBeGreaterThan(section.indexOf('## Tokens'));
+  });
+
+  it('--mark validates its arguments and needs a start before an end', () => {
+    const { root, cli } = splitChange();
+    const noStart = cli(['--mark', 'demo', '1', 'end'], '2026-09-24T10:00:00Z');
+    expect(noStart.code).toBe(2);
+    expect(noStart.err).toContain('round 1 of demo has no start mark');
+    const missing = cli(['--mark', 'ghost', '1', 'start'], '2026-09-24T10:00:00Z');
+    expect(missing.code).toBe(2);
+    expect(missing.err).toContain('no such change');
+    expect(cli(['--mark', 'demo', '1', 'middle']).code).toBe(2);
+    expect(cli(['--mark', '../demo', '1', 'start']).code).toBe(2);
+    expect(cli(['--mark', 'demo', '1']).code).toBe(2);
+
+    expect(cli(['--mark', 'demo', '1', 'start'], '2026-09-24T10:00:00Z').code).toBe(0);
+    const early = cli(['--mark', 'demo', '1', 'end'], '2026-09-24T09:00:00Z');
+    expect(early.code).toBe(2);
+    expect(early.err).toContain('before the start');
+    const ok = cli(['--mark', 'demo', '1', 'end'], '2026-09-24T10:30:00Z');
+    expect(ok.out).toBe(
+      `Marked demo round 1 end at 2026-09-24T10:30:00.000Z (${join(root, 'openspec/changes/demo/reviews/.marks.json')})`,
+    );
+    // Re-starting a round reopens its window.
+    cli(['--mark', 'demo', '1', 'start'], '2026-09-24T11:00:00Z');
+    const text = readFileSync(join(root, 'openspec/changes/demo/reviews/.marks.json'), 'utf8');
+    expect(JSON.parse(text)).toEqual({ rounds: { '1': { start: '2026-09-24T11:00:00.000Z' } } });
+  });
+});

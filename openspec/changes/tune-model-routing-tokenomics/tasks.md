@@ -42,11 +42,11 @@
 
 ## 10. Round 2 (see reviews/round-1.md)
 
-- [ ] 10.1 F1: `--change` without `--session` aggregates all sessions — test: `tokens.test.ts` (Scenario: Change total spans sessions)
-- [ ] 10.2 F4 (human decision): `pnpm tokens --mark`, orchestrator rows per round, used by `/build-feature` — test: `tokens.test.ts` (Scenario: Orchestrator usage is attributed to its round)
-- [ ] 10.3 F2: summary mode strips pnpm/npm reporter/loglevel env so gate logs are complete — test: `verify-runner.test.ts`
-- [ ] 10.4 F3: `pnpm check:agents` in the CI spec job
-- [ ] 10.5 Nits F5–F10 (FORCE_COLOR, stale logs, allowlist `pnpm -s`, CLAUDE.md wording, document the complexity-marker rule, resume continues from the highest round)
+- [x] 10.1 F1: `--change` without `--session` aggregates all sessions — test: `tokens.test.ts` (Scenario: Change total spans sessions)
+- [x] 10.2 F4 (human decision): `pnpm tokens --mark`, orchestrator rows per round, used by `/build-feature` — test: `tokens.test.ts` (Scenario: Orchestrator usage is attributed to its round)
+- [x] 10.3 F2: summary mode strips pnpm/npm reporter/loglevel env so gate logs are complete — test: `verify-runner.test.ts`
+- [x] 10.4 F3: `pnpm check:agents` in the CI spec job
+- [x] 10.5 Nits F5–F10 (FORCE_COLOR, stale logs, allowlist `pnpm -s`, CLAUDE.md wording, document the complexity-marker rule, resume continues from the highest round)
 
 ## 9. Verify
 
