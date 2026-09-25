@@ -1,9 +1,11 @@
 import { CreateTodoInputSchema, TODO_TITLE_MAX } from '@web-loop/shared';
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { useCreateTodo } from '../api/todos';
 import { localInputToIso } from '../lib/due';
 
 type FieldError = { field: 'title' | 'dueAt'; message: string };
+
+const DUE_ERROR: FieldError = { field: 'dueAt', message: 'Enter a valid due date' };
 
 const inputClass =
   'rounded-md border border-slate-300 px-3 py-2 focus:outline-2 focus:outline-indigo-500';
@@ -13,10 +15,17 @@ export function TodoForm() {
   // `datetime-local` value: local wall-clock time without an offset, or '' when not set.
   const [due, setDue] = useState('');
   const [error, setError] = useState<FieldError | null>(null);
+  const dueRef = useRef<HTMLInputElement>(null);
   const createTodo = useCreateTodo();
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
+    // A partially entered date/time reports value '' with `validity.badInput`: that is not
+    // "no due date", so block the submit instead of silently dropping it.
+    if (dueRef.current?.validity.badInput) {
+      setError(DUE_ERROR);
+      return;
+    }
     const parsed = CreateTodoInputSchema.safeParse(
       due ? { title, dueAt: localInputToIso(due) } : { title },
     );
@@ -24,7 +33,7 @@ export function TodoForm() {
       const issue = parsed.error.issues[0];
       setError(
         issue?.path[0] === 'dueAt'
-          ? { field: 'dueAt', message: 'Enter a valid due date' }
+          ? DUE_ERROR
           : { field: 'title', message: issue?.message ?? 'Invalid title' },
       );
       return;
@@ -65,6 +74,7 @@ export function TodoForm() {
             Due (optional)
           </label>
           <input
+            ref={dueRef}
             id="new-todo-due"
             type="datetime-local"
             value={due}

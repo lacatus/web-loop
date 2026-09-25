@@ -27,8 +27,8 @@
 
 ## 6. Round 2 (review findings, see reviews/round-1.md)
 
-- [ ] 6.1 F1: block submit when "Due (optional)" has `validity.badInput`; show "Enter a valid due date" — test: TodosPage.test.tsx (Scenario: Reject an incomplete due date)
-- [ ] 6.2 F4: accept ISO datetimes without seconds — tests: packages/shared/src/todo.test.ts, apps/api/test/todos.test.ts
-- [ ] 6.3 F3: after "Clear due date for <title>", move focus to that todo's checkbox — test: TodosPage.test.tsx
-- [ ] 6.4 F5: keep "Delete" aligned right at 375px
-- [ ] 6.5 `pnpm verify` green
+- [x] 6.1 F1: block submit when "Due (optional)" has `validity.badInput`; show "Enter a valid due date" — test: TodosPage.test.tsx (Scenario: Reject an incomplete due date)
+- [x] 6.2 F4: accept ISO datetimes without seconds — tests: packages/shared/src/todo.test.ts, apps/api/test/todos.test.ts
+- [x] 6.3 F3: after "Clear due date for <title>", move focus to that todo's checkbox — test: TodosPage.test.tsx
+- [x] 6.4 F5: keep "Delete" aligned right at 375px
+- [x] 6.5 `pnpm verify` green

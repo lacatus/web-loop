@@ -140,6 +140,26 @@ describe('todos API', () => {
     expect(res.json<Todo>().dueAt).toBe('2026-10-02T04:15:00.000Z');
   });
 
+  it('Scenario: Create a todo with a due date — accepts ISO datetimes without seconds (create and PATCH)', async () => {
+    const utc = await create('No seconds Z', '2026-10-01T10:00Z');
+    expect(utc.dueAt).toBe('2026-10-01T10:00:00.000Z');
+    const offset = await create('No seconds offset', '2026-10-01T10:00+02:00');
+    expect(offset.dueAt).toBe('2026-10-01T08:00:00.000Z');
+
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/api/todos/${utc.id}`,
+      payload: { dueAt: '2026-10-03T07:45-01:00' },
+    });
+    expect(patch.statusCode).toBe(200);
+    expect(patch.json<Todo>().dueAt).toBe('2026-10-03T08:45:00.000Z');
+
+    expect((await list()).map((t) => [t.title, t.dueAt])).toEqual([
+      ['No seconds offset', '2026-10-01T08:00:00.000Z'],
+      ['No seconds Z', '2026-10-03T08:45:00.000Z'],
+    ]);
+  });
+
   it('Scenario: Create a todo without a due date — returns and stores dueAt: null', async () => {
     const omitted = await create('No due');
     const explicitNull = await create('Null due', null);

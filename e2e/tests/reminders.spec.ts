@@ -122,6 +122,8 @@ test.describe('due dates and reminders', () => {
 
     await expect(item.locator('time')).toHaveCount(0);
     await expect(page.getByRole('button', { name: `Clear due date for ${title}` })).toHaveCount(0);
+    // Keyboard focus lands on the todo's checkbox rather than falling back to <body>.
+    await expect(page.getByRole('checkbox', { name: title, exact: true })).toBeFocused();
 
     await page.reload();
     await expect(page.getByLabel(title, { exact: true })).toBeVisible();
@@ -139,6 +141,33 @@ test.describe('due dates and reminders', () => {
     // The UI shows the same order as the API.
     const uiTitles = await listTitles(page);
     expect(uiTitles).toEqual(list.map((t) => t.title));
+  });
+
+  test('Scenario: Reject an incomplete due date', async ({ page }) => {
+    const title = unique('Partial due');
+    await page.getByLabel('New todo').fill(title);
+    const dueInput = page.getByLabel('Due (optional)');
+    // Type only the date segments, leaving the time empty: the browser reports badInput.
+    await dueInput.click();
+    await page.keyboard.type('10012026');
+    // (e2e has no DOM lib types, hence the structural type for the input element.)
+    const badInput = await dueInput.evaluate(
+      (el) => (el as unknown as { validity: { badInput: boolean } }).validity.badInput,
+    );
+    expect(badInput).toBe(true);
+
+    let posted = false;
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && r.url().endsWith('/api/todos')) posted = true;
+    });
+    await page.keyboard.press('Enter');
+
+    await expect(page.getByRole('alert')).toHaveText('Enter a valid due date');
+    await expect(dueInput).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.getByLabel(title, { exact: true })).toHaveCount(0);
+    expect(posted).toBe(false);
+    const list = (await (await page.request.get('/api/todos')).json()) as Todo[];
+    expect(list.some((t) => t.title === title)).toBe(false);
   });
 
   test('Scenario: Sort by due date', async ({ page }) => {

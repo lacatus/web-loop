@@ -8,13 +8,20 @@ const title = z
   .min(1, 'Title is required')
   .max(TODO_TITLE_MAX, `Title must be at most ${TODO_TITLE_MAX} characters`);
 
+const isoWithSeconds = z.iso.datetime({ offset: true });
+const isoWithoutSeconds = z.iso.datetime({ offset: true, precision: -1 });
+
 /**
  * A due date as sent by clients: any ISO-8601 datetime with a timezone offset (`Z` or `±hh:mm`),
- * normalized to a UTC ISO string (`YYYY-MM-DDTHH:mm:ss.sssZ`). The final pipe rejects instants
- * whose UTC form falls outside 4-digit years (e.g. `0000-01-01T00:00:00+01:00`).
+ * seconds and fractional seconds optional (e.g. `2026-10-01T10:00Z`), normalized to a UTC ISO
+ * string (`YYYY-MM-DDTHH:mm:ss.sssZ`). The final pipe rejects instants whose UTC form falls
+ * outside 4-digit years (e.g. `0000-01-01T00:00:00+01:00`).
  */
-const dueAtInput = z.iso
-  .datetime({ offset: true, message: 'Due date must be an ISO-8601 datetime with an offset' })
+const dueAtInput = z
+  .string()
+  .refine((v) => isoWithSeconds.safeParse(v).success || isoWithoutSeconds.safeParse(v).success, {
+    message: 'Due date must be an ISO-8601 datetime with an offset',
+  })
   .transform((v) => new Date(v).toISOString())
   .pipe(z.iso.datetime({ message: 'Due date is out of range' }))
   .nullable()

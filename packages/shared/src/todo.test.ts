@@ -36,6 +36,22 @@ describe('todos contract', () => {
     ).toEqual({ title: 'Pay rent', dueAt: '2026-10-01T07:30:00.000Z' });
   });
 
+  it('Scenario: Create a todo with a due date — accepts ISO datetimes without seconds', () => {
+    expect(CreateTodoInputSchema.parse({ title: 'a', dueAt: '2026-10-01T10:00Z' }).dueAt).toBe(
+      '2026-10-01T10:00:00.000Z',
+    );
+    expect(CreateTodoInputSchema.parse({ title: 'a', dueAt: '2026-10-01T10:00+02:00' }).dueAt).toBe(
+      '2026-10-01T08:00:00.000Z',
+    );
+    expect(UpdateTodoInputSchema.parse({ dueAt: '2026-10-01T10:00-05:30' }).dueAt).toBe(
+      '2026-10-01T15:30:00.000Z',
+    );
+    // Seconds-less forms are still strictly validated.
+    for (const dueAt of ['2026-02-30T10:00Z', '2026-10-01T24:00Z', '2026-10-01T10:00']) {
+      expect(CreateTodoInputSchema.safeParse({ title: 'a', dueAt }).success).toBe(false);
+    }
+  });
+
   it('Scenario: Clear a due date — an update may set dueAt to null', () => {
     expect(UpdateTodoInputSchema.parse({ dueAt: null })).toEqual({ dueAt: null });
   });

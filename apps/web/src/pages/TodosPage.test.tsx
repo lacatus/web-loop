@@ -226,6 +226,60 @@ describe('TodosPage — due dates and reminders', () => {
     expect(dueInput).toHaveValue('');
   });
 
+  it('Scenario: Reject an incomplete due date — a partially entered due date blocks the submit with an error', async () => {
+    const { fetchMock } = serve([]);
+    const { user } = renderWithProviders(<TodosPage />);
+    await screen.findByText(/no todos yet/i);
+
+    await user.type(screen.getByLabelText('New todo'), 'Partial due');
+    const dueInput = screen.getByLabelText('Due (optional)');
+    expect(dueInput).not.toHaveAttribute('aria-invalid');
+    // What a browser reports for e.g. a date without a time: an empty value plus badInput.
+    Object.defineProperty(dueInput, 'validity', {
+      configurable: true,
+      value: { ...(dueInput as HTMLInputElement).validity, badInput: true, valid: false },
+    });
+    expect(dueInput).toHaveValue('');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Enter a valid due date');
+    expect(dueInput).toHaveAttribute('aria-invalid', 'true');
+    expect(dueInput).toHaveAttribute('aria-describedby', alert.id);
+    expect(screen.getByLabelText('New todo')).not.toHaveAttribute('aria-invalid');
+    expect(screen.getByLabelText('New todo')).toHaveValue('Partial due');
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    expect(screen.getByText(/no todos yet/i)).toBeInTheDocument();
+
+    // Once the date is completed, the todo is created and the error goes away.
+    Object.defineProperty(dueInput, 'validity', {
+      configurable: true,
+      value: { ...(dueInput as HTMLInputElement).validity, badInput: false, valid: true },
+    });
+    fireEvent.change(dueInput, { target: { value: '2026-10-01T09:30' } });
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+    await screen.findByLabelText('Partial due');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(dueInput).not.toHaveAttribute('aria-invalid');
+  });
+
+  it('Scenario: Reject an incomplete due date — a date the contract cannot represent shows the same error', async () => {
+    const { fetchMock } = serve([]);
+    const { user } = renderWithProviders(<TodosPage />);
+    await screen.findByText(/no todos yet/i);
+
+    await user.type(screen.getByLabelText('New todo'), 'Far future');
+    const dueInput = screen.getByLabelText('Due (optional)');
+    // A complete datetime-local value whose year is outside the API's 4-digit range.
+    fireEvent.change(dueInput, { target: { value: '10000-01-01T00:00' } });
+    expect(dueInput).toHaveValue('10000-01-01T00:00');
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Enter a valid due date');
+    expect(dueInput).toHaveAttribute('aria-invalid', 'true');
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+  });
+
   it('Scenario: Sort by due date — shows todos in the order returned by the API', async () => {
     serve([
       todo({ id: 1, title: 'No due date' }),
@@ -393,5 +447,26 @@ describe('TodosPage — due dates and reminders', () => {
     expect(String(patch?.[0])).toBe('/api/todos/2');
     expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ dueAt: null });
     expect(current().find((t) => t.id === 2)?.dueAt).toBeNull();
+  });
+
+  it('Scenario: Clear a due date — keyboard focus moves to the todo checkbox, even after the list re-sorts', async () => {
+    serve([
+      todo({ id: 1, title: 'Undated first' }),
+      todo({ id: 2, title: 'Call mom', dueAt: inMinutes(10) }),
+    ]);
+    const { user } = renderWithProviders(<TodosPage />);
+    await screen.findByLabelText('Call mom');
+
+    screen.getByRole('button', { name: 'Clear due date for Call mom' }).focus();
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => expect(listTitles()).toEqual(['Undated first', 'Call mom']));
+    const checkbox = screen.getByRole('checkbox', { name: 'Call mom' });
+    await waitFor(() => expect(checkbox).toHaveFocus());
+    // Focus stays put once the clear has settled (no later render steals it back or drops it).
+    await new Promise((r) => setTimeout(r, 50));
+    expect(checkbox).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Delete Call mom' })).toHaveFocus();
   });
 });
