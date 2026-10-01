@@ -52,6 +52,14 @@ The sample **Todos** feature (spec: `openspec/specs/todos/spec.md`) shows the wh
 shared schema → Fastify route + Drizzle table → React page → tests at every layer, each named
 after its scenario.
 
+New here? **[docs/first-run.md](docs/first-run.md)** is a guided walkthrough of the whole loop
+on one small feature (due dates and reminders for todos), mirroring the reference run in
+[PR #2](https://github.com/lacatus/web-loop/pull/2).
+
+**Requirements:** Node 22+, pnpm 10 (`corepack enable`), and [Claude Code](https://claude.com/claude-code)
+for the loop itself (`/opsx:*`, `/build-feature`, `/review`). The app, tests and `pnpm verify:fast`
+need no Claude at all. `pnpm verify` and Playwright MCP also need Chromium.
+
 ## Building a feature with Claude Code
 
 ```text
@@ -136,3 +144,15 @@ openspec            specs (source of truth), changes, archive, config.yaml (proj
 .mcp.json           Playwright MCP server
 scripts             traceability, Playwright MCP launcher, review server
 ```
+
+## Security notes
+
+This is a demo app, not a hardened service: the API has no authentication, CORS configuration or
+rate limiting, and binds to `127.0.0.1` only. The Claude Code project config
+(`.claude/settings.json`) runs hooks that install dependencies when a session starts and format
+files after edits, and allows a short list of pnpm/openspec/read-only git commands without
+prompting. Review it before trusting the folder in Claude Code.
+
+## License
+
+[MIT](LICENSE)
